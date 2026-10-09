@@ -11,15 +11,19 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
     "build": "npm run build -w @your-bot/contracts && npm run build -w @your-bot/core && npm run build -w @your-bot/adapters && npm run build -w @your-bot/executor && npm run build -w @your-bot/desktop",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.tests.json",
     "test": "vitest run",
-    "dev": "npm run dev -w @your-bot/desktop",
+    "test:integration": "vitest run tests/integration.test.ts",
+    "test:security": "vitest run packages/executor packages/adapters/test/bubblewrap.test.ts",
+    "test:desktop": "node tests/run-desktop-smoke.mjs",
+    "setup:electron": "node node_modules/electron/install.js",
+    "dev": "npm run build && npm run dev -w @your-bot/desktop",
     "start": "npm run start -w @your-bot/desktop",
     "package": "npm run package -w @your-bot/desktop"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.0",
     "@types/node": "^22.19.0",
     "typescript": "~5.9.3",
     "vitest": "^4.0.18"

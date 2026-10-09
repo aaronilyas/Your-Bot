@@ -51,7 +51,7 @@ function PermissionDialog({ request, sessionTitle, store }: { request: Permissio
     if (!result?.ok) setError(result && !result.ok ? result.error.message : 'Could not send your decision. Reconnect and try again.');
     setSending(false);
   }
-  return <Modal title="Your permission is needed"><div className="permission-intro"><span className="permission-icon"><Icon name="shield" size={25} /></span><div><strong>{request.capability}</strong><p>{sessionTitle}</p></div></div><p className="reason">{request.reason}</p>
+  return <Modal title="Your permission is needed"><div className="permission-intro"><span className="permission-icon"><Icon name="shield" size={25} /></span><div><strong>{request.capability}</strong><p>{sessionTitle}</p></div></div><pre className="permission-reason">{request.reason}</pre>
     {request.paths?.length ? <div className="scope-list"><h3>Exact file access</h3>{request.paths.map((path, index) => <div className="scope" key={index}><span className="tag">{path.access}</span><code>{path.path}</code></div>)}</div> : null}
     {request.packages?.length ? <div className="scope-list"><h3>Packages to install</h3>{request.packages.map((name, index) => <code className="package" key={index}>{name}</code>)}</div> : null}
     <p className="help">Approval applies only to this request’s operation and exact scope. Task approval expires when this task ends.</p>
@@ -61,6 +61,7 @@ function PermissionDialog({ request, sessionTitle, store }: { request: Permissio
 }
 function SettingsDialog({ settings, store, onClose }: { settings: AppSettings; store: DesktopStore; onClose: () => void }) {
   const [providers, setProviders] = useState<ProviderConfig[]>(() => structuredClone(settings.providers).map(({ apiKey: _secret, ...provider }) => provider));
+  const [newKeys, setNewKeys] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const patch = (id: string, values: Partial<ProviderConfig>) => setProviders(current => current.map(provider => provider.id === id ? { ...provider, ...values } : provider));
@@ -68,24 +69,27 @@ function SettingsDialog({ settings, store, onClose }: { settings: AppSettings; s
     event.preventDefault(); setError(undefined);
     for (const provider of providers) {
       if (!provider.name.trim()) { setError('Give each provider a name.'); return; }
+      if (provider.kind === 'acp' && provider.enabled && (!['/usr/bin/node', '/usr/bin/python3'].includes(provider.command ?? '') || provider.args?.length !== 1 || !provider.args[0].startsWith('/') || !/\.(mjs|py)$/.test(provider.args[0]))) {
+        setError('ACP needs a supported system runtime and one absolute .mjs or .py harness script.'); return;
+      }
       if (provider.kind !== 'acp' && provider.enabled) {
         try { const url = new URL(provider.endpoint ?? ''); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); }
         catch { setError(`Enter an HTTP or HTTPS endpoint without embedded credentials for ${provider.name}.`); return; }
       }
     }
     setSaving(true);
-    const result = await store.command({ type: 'settings.update', settings: { providers } });
+    const result = await store.command({ type: 'settings.update', settings: { providers: providers.map(provider => newKeys[provider.id] ? { ...provider, apiKey: newKeys[provider.id] } : provider) } });
     if (result?.ok) { await store.command({ type: 'models.refresh' }); onClose(); }
     else setError(result && !result.ok ? result.error.message : 'Could not save settings. Reconnect and try again.');
     setSaving(false);
   }
   return <Modal title="Provider settings" onClose={onClose}><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
     <form onSubmit={event => void save(event)}><div className="provider-list">{providers.map((provider, index) => <fieldset className="provider" key={provider.id} disabled={saving}><legend>Provider {index + 1}</legend><div className="provider-top"><label>Name<input value={provider.name} onChange={e => patch(provider.id, { name: e.target.value })} /></label><label className="toggle"><input type="checkbox" checked={provider.enabled} onChange={e => patch(provider.id, { enabled: e.target.checked })} />Enabled</label><button type="button" className="icon-button" aria-label={`Remove ${provider.name}`} onClick={() => setProviders(current => current.filter(p => p.id !== provider.id))}><Icon name="trash" /></button></div>
-      <div className="provider-grid"><label>Provider type<select value={provider.kind} disabled={provider.kind === 'acp'} onChange={e => patch(provider.id, { kind: e.target.value as ProviderConfig['kind'] })}>{provider.kind === 'acp' && <option value="acp">ACP agent</option>}<option value="lmstudio">LM Studio</option><option value="llamacpp">llama.cpp</option><option value="openai-compatible">OpenAI compatible</option></select></label><label>Model ID (optional)<input value={provider.modelId ?? ''} placeholder="Discovered automatically" onChange={e => patch(provider.id, { modelId: e.target.value || undefined })} /></label></div>
-      {provider.kind === 'acp' ? <p className="help">ACP launch is configured by the host and requires enforced process containment.</p> : <label>Endpoint<input type="url" placeholder="http://127.0.0.1:1234/v1" value={provider.endpoint ?? ''} onChange={e => patch(provider.id, { endpoint: e.target.value })} /></label>}
+      <div className="provider-grid"><label>Provider type<select value={provider.kind} onChange={e => { const kind = e.target.value as ProviderConfig['kind']; patch(provider.id, { kind, ...(kind === 'acp' ? { command: '/usr/bin/node', args: [''] } : { endpoint: kind === 'lmstudio' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:8080/v1' }) }); }}><option value="acp">ACP agent</option><option value="lmstudio">LM Studio</option><option value="llamacpp">llama.cpp</option><option value="openai-compatible">OpenAI compatible</option></select></label><label>Model ID (optional)<input value={provider.modelId ?? ''} placeholder="Discovered automatically" onChange={e => patch(provider.id, { modelId: e.target.value || undefined })} /></label></div>
+      {provider.kind === 'acp' ? <><label>Harness runtime<select value={provider.command ?? '/usr/bin/node'} onChange={e => patch(provider.id, { command: e.target.value })}><option value="/usr/bin/node">System Node.js</option><option value="/usr/bin/python3">System Python</option></select></label><label>Harness script<input value={provider.args?.[0] ?? ''} placeholder="/absolute/path/agent.mjs" onChange={e => patch(provider.id, { args: [e.target.value] })} /></label><p className="help">Linux isolation is required. This launch policy supports one script, denies network and native terminal/file tools, and routes Your Bot tools through approvals.</p></> : <><label>Endpoint<input type="url" placeholder="http://127.0.0.1:1234/v1" value={provider.endpoint ?? ''} onChange={e => patch(provider.id, { endpoint: e.target.value })} /></label><label>API key (optional)<input type="password" autoComplete="off" value={newKeys[provider.id] ?? ''} placeholder="Leave blank to preserve the stored key" onChange={e => setNewKeys(current => ({ ...current, [provider.id]: e.target.value }))} /></label><label className="toggle"><input type="checkbox" checked={provider.apiKey === ''} onChange={e => patch(provider.id, { apiKey: e.target.checked ? '' : undefined })} />Remove stored API key</label></>}
     </fieldset>)}</div>
     <button type="button" className="button text" disabled={saving || providers.length >= 64} onClick={() => setProviders(current => [...current, { id: crypto.randomUUID(), name: 'Local provider', kind: 'openai-compatible', endpoint: 'http://127.0.0.1:8080/v1', enabled: true }])}><Icon name="plus" />Add provider</button>
-    <p className="help">Credentials remain in the host’s local store and are never shown here. Configure API keys through the host integration.</p>
+    <p className="help">Credentials stay in the private local store. Stored keys are never sent back to this interface.</p>
     {error && <p className="inline-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="button secondary" disabled={saving} onClick={onClose}>Cancel</button><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></div>
     </form></Modal>;
 }

@@ -7,6 +7,7 @@ import { parseToolInvocation, TOOL_DEFINITION } from './tools.js';
 
 export interface LocalAdapterOptions {
   timeoutMs?: number;
+  discoveryTimeoutMs?: number;
   maxToolRounds?: number;
   maxToolCallsPerRound?: number;
   maxResponseBytes?: number;
@@ -27,6 +28,7 @@ export class OpenAICompatibleAdapter implements AgentAdapter {
   private readonly rounds: number;
   private readonly callsPerRound: number;
   private readonly maxBytes: number;
+  private readonly discoveryTimeoutMs: number;
 
   constructor(config: ProviderConfig, options: LocalAdapterOptions = {}) {
     if (config.kind === 'acp') throw new AdapterError('INVALID_CONFIG', 'Local adapter requires an HTTP provider.');
@@ -44,6 +46,7 @@ export class OpenAICompatibleAdapter implements AgentAdapter {
     this.rounds = positiveInteger(options.maxToolRounds ?? 8, 'maxToolRounds');
     this.callsPerRound = positiveInteger(options.maxToolCallsPerRound ?? 16, 'maxToolCallsPerRound');
     this.maxBytes = positiveInteger(options.maxResponseBytes ?? 16_777_216, 'maxResponseBytes');
+    this.discoveryTimeoutMs = positiveInteger(options.discoveryTimeoutMs ?? 5000, 'discoveryTimeoutMs');
     this.fetcher = options.fetch ?? globalThis.fetch;
   }
 
@@ -114,11 +117,12 @@ export class OpenAICompatibleAdapter implements AgentAdapter {
     this.runs.assertOpen();
     const info: AgentInfo = { id: this.id, name: this.config.name, kind: 'local', models: [], available: false };
     if (!this.config.enabled) return { ...info, limitation: 'Provider is disabled.' };
-    const scope = this.runs.begin(`discovery:${randomUUID()}`);
+    const deadline = AbortSignal.timeout(this.discoveryTimeoutMs);
+    const scope = this.runs.begin(`discovery:${randomUUID()}`, deadline);
     try {
       const models = await this.discover(scope.signal);
       return { ...info, models, available: models.length > 0, ...(models.length ? {} : { limitation: 'Provider has no loaded models.' }) };
-    } catch (error) { return { ...info, limitation: normalizeAdapterError(error, scope.signal).message }; }
+    } catch (error) { return { ...info, limitation: deadline.aborted ? 'Model discovery timed out.' : normalizeAdapterError(error, scope.signal).message }; }
     finally { scope.finish(); }
   }
 

@@ -101,7 +101,8 @@ export function validateSettings(value: unknown): AppSettings {
 export function validatePermissionInput(value: unknown): { capability: Principal['capabilities'][number]; reason: string; paths?: FileScope[]; packages?: string[] } {
   const object = record(value, ['capability', 'reason', 'paths', 'packages'], ['capability', 'reason']);
   assert(capabilities.includes(object.capability as string), 'Invalid capability');
-  string(object.reason, 'permission reason', 4096);
+  // Custom Python approvals carry the complete reviewed code and its digest.
+  string(object.reason, 'permission reason', 1_001_024);
   if (Object.hasOwn(object, 'paths')) validatePaths(object.paths);
   if (Object.hasOwn(object, 'packages')) validatePackages(object.packages);
   if ((object.capability as string).startsWith('file.')) {

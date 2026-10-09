@@ -39,7 +39,10 @@
     "package:dir": "npm run build && electron-builder --linux --dir --config electron-builder.yml"
   },
   "dependencies": {
+    "@your-bot/adapters": "0.1.0",
     "@your-bot/contracts": "*",
+    "@your-bot/core": "0.1.0",
+    "@your-bot/executor": "0.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^4.3.6"
@@ -54,7 +57,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "44.7.0",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.27.4",
+    "esbuild": "^0.28.2",
     "jsdom": "^29.0.0",
     "typescript": "~5.9.3",
     "vite": "^8.3.4",

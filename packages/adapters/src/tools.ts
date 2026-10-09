@@ -5,7 +5,7 @@ export const TOOL_DEFINITION = {
   type: 'function',
   function: {
     name: 'execute_tool',
-    description: 'Request a Your Bot tool. The host validates and authorizes every operation. File paths and packages require host approval.',
+    description: 'Request a Your Bot tool; the host validates and asks the user to approve execution, exact files and packages. Skills: calculation input {operation: sum|product|mean|median|min|max|stdev|variance, values:number[]}; data.analysis input {rows:object[],column:string} or {path,column}; structured.json input {text:string} or {value:any}, optional select:string[]; structured.csv input {text:string}; file.read input {path}; file.write input {path,text}; file.delete input {path}. Declare absolute paths with matching read/write/delete access. Custom python code receives input and files (approved host path to sandbox path map); assign JSON-serializable result. Python cannot create processes, threads or network sockets. library.install requires packages containing exact PyPI names, preferably ==version pins; only pure-Python wheels, dependencies must be separately requested.',
     parameters: {
       type: 'object', additionalProperties: false,
       required: ['kind', 'input'],

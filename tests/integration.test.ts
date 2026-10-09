@@ -96,6 +96,12 @@ describe('integrated headless command transport, local model, SQLite and real Py
     const requested = f.events.filter(e => e.type === 'permission.requested').map(e => e.request);
     expect(requested.some(p => p.capability === 'file.write' && p.paths?.[0].path === sentinel)).toBe(true);
     expect(requested.some(p => p.capability === 'file.read' && p.paths?.[0].path === sentinel)).toBe(true);
+    const created = join(f.root, 'new-output.txt');
+    const multiFile = await f.tool({ id: 'multiple-exact-files', kind: 'python', input: { created, sentinel }, paths: [{ path: created, access: 'write' }, { path: sentinel, access: 'write' }],
+      code: "for name in ['created','sentinel']:\n with open(files[input[name]], 'w') as target:\n  target.write('scoped output')\nresult = True" });
+    expect(multiFile.type).toBe('task.completed');
+    expect(await readFile(created, 'utf8')).toBe('scoped output');
+    expect(await readFile(sentinel, 'utf8')).toBe('scoped output');
   });
   it('keeps a denied permission from reaching Python and clears pending requests when cancelled', async () => {
     const f = await fixture(false);

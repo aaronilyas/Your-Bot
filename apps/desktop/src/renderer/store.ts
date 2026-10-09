@@ -64,7 +64,9 @@ export class DesktopStore {
   }
   async command(payload: CommandPayload): Promise<CommandResult | undefined> {
     const generation = this.generation;
-    const command: DesktopCommand = { ...payload, version: 1, id: crypto.randomUUID() };
+    // IPC preserves undefined properties; the wire contract is JSON. Normalize
+    // optional fields consistently with the future WebSocket transport.
+    const command: DesktopCommand = JSON.parse(JSON.stringify({ ...payload, version: 1, id: crypto.randomUUID() }));
     this.update({ pendingCommands: this.state.pendingCommands + 1 });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {

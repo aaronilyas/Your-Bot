@@ -116,6 +116,9 @@ class Gateway implements DesktopGateway {
     return clean(value) as T;
   }
   private error(error: unknown): {code: string; message: string} {
+    if (error instanceof Error && 'code' in error && typeof error.code === 'string' && /^[A-Z0-9_]{1,128}$/.test(error.code)) {
+      return this.scrub({ code: error.code, message: error.message.slice(0, 4096), ...('retryable' in error && typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}) });
+    }
     return this.scrub(error instanceof GatewayError ? { code: error.code, message: error.message } : { code: 'INTERNAL_ERROR', message: 'Operation failed' });
   }
   private emit(owner: string, payload: EventPayload): DesktopEvent {
@@ -247,6 +250,7 @@ class Gateway implements DesktopGateway {
         const session = this.store.getSession(command.sessionId, principal.id);
         if (this.busy(session.id)) throw new GatewayError('SESSION_BUSY', 'A task is already running in this session');
         const adapter = this.availableAgent(session.agentId, session.modelId); const task = this.newTask(session, principal, adapter);
+        if (!session.messages.length && session.title === 'New conversation') session.title = command.content.split('\n')[0].trim().slice(0, 80) || 'New conversation';
         session.messages.push({ id: randomUUID(), role: 'user', content: command.content, createdAt: new Date().toISOString(), taskId: task.id });
         session.updatedAt = new Date().toISOString(); this.store.saveSession(principal.id, session); this.emit(principal.id, { type: 'session.updated', session });
         this.emit(principal.id, { type: 'task.started', taskId: task.id, sessionId: session.id });
@@ -325,6 +329,7 @@ class Gateway implements DesktopGateway {
       assert(update && typeof update === 'object', 'Invalid agent update');
       if (update.type === 'text') {
         record(update, ['type', 'text']); string(update.text, 'text delta', 1_000_000, true);
+        if (task.text.length + update.text.length > 16_777_216) throw new GatewayError('RESPONSE_LIMIT', 'Assistant response exceeded the conversation size limit');
         task.text += update.text;
         const streamed = this.streamText(task.deltaPending + update.text); task.deltaPending = streamed.pending;
         if (streamed.text) this.taskEvent(task, { type: 'message.delta', taskId: task.id, sessionId: task.sessionId, text: streamed.text });
@@ -361,10 +366,12 @@ class Gateway implements DesktopGateway {
     this.require(task.principal, 'tool.execute');
     const invocation = validateInvocation(value);
     if (invocation.paths) invocation.paths = await canonicalPaths(invocation.paths, this.store.path);
-    const requests: PermissionInput[] = [{ capability: 'tool.execute', reason: `Execute ${invocation.kind} tool ${invocation.id}` }];
-    for (const access of ['read', 'write', 'delete'] as const) {
-      const paths = invocation.paths?.filter(path => path.access === access);
-      if (paths?.length) requests.push({ capability: `file.${access}`, reason: `Tool ${invocation.id} requests ${access} access`, paths });
+    const reason = invocation.kind === 'python'
+      ? 'Execute custom Python sha256:' + createHash('sha256').update(invocation.code!).digest('hex') + '\n\n' + invocation.code
+      : `Execute ${invocation.kind} tool ${invocation.id}`;
+    const requests: PermissionInput[] = [{ capability: 'tool.execute', reason }];
+    for (const path of invocation.paths ?? []) {
+      requests.push({ capability: `file.${path.access}`, reason: `Tool ${invocation.id} requests ${path.access} access`, paths: [path] });
     }
     if (invocation.packages?.length) requests.push({ capability: 'library.install', reason: `Install packages for tool ${invocation.id}`, packages: invocation.packages });
     // Check all capabilities before asking for any approvals.
@@ -409,6 +416,7 @@ class Gateway implements DesktopGateway {
   }
   private covers(grant: PermissionRequest, request: PermissionInput): boolean {
     if (grant.capability !== request.capability) return false;
+    if (grant.capability === 'tool.execute' && (grant.reason.startsWith('Execute custom Python sha256:') || request.reason.startsWith('Execute custom Python sha256:')) && grant.reason !== request.reason) return false;
     if (request.paths && !request.paths.every(path => grant.paths?.some(allowed => allowed.path === path.path && allowed.access === path.access))) return false;
     if (request.packages && !request.packages.every(pkg => grant.packages?.includes(pkg))) return false;
     return true;
@@ -416,7 +424,16 @@ class Gateway implements DesktopGateway {
   private async issuePermission(task: Task, raw: PermissionInput): Promise<PermissionDecision> {
     const input = validatePermissionInput(raw); this.require(task.principal, input.capability);
     if (input.capability === 'conversation' || input.capability === 'settings') throw new GatewayError('FORBIDDEN', 'Permission requests are limited to tool capabilities');
-    if (input.paths) input.paths = await canonicalPaths(input.paths, this.store.path);
+    if (input.paths) {
+      input.paths = await Promise.all(input.paths.map(async scope => {
+        // New exact write targets need a separate read approval before a writable
+        // mount is created. Resolve their parent using the already-approved write
+        // scope, while keeping the new approval's capability strictly file.read.
+        const newWriteRead = scope.access === 'read' && task.grants.some(grant => grant.request.capability === 'file.write' && grant.request.paths?.some(path => path.path === scope.path));
+        const [canonical] = await canonicalPaths([{ ...scope, ...(newWriteRead ? { access: 'write' as const } : {}) }], this.store.path);
+        return { ...canonical, access: scope.access };
+      }));
+    }
     if (!this.live(task)) return { requestId: randomUUID(), outcome: 'deny', scope: 'once' };
     const existing = task.grants.find(grant => this.covers(grant.request, input));
     if (existing) return { requestId: existing.request.id, outcome: 'allow', scope: existing.scope };
