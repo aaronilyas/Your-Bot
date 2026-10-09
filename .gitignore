@@ -8,3 +8,4 @@ coverage/
 .your-bot/
 test-results/
 playwright-report/
+.validation/
