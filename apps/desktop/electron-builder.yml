@@ -1,0 +1,22 @@
+appId: dev.yourbot.desktop
+productName: Your Bot
+asar: true
+directories:
+  output: release
+files:
+  - dist/main/**
+  - dist/preload/**
+  - dist/renderer/**
+  - package.json
+linux:
+  syncDesktopName: true
+  icon: resources/icon.png
+  category: Utility
+  target:
+    - AppImage
+    - deb
+  executableName: your-bot
+  synopsis: Private, local-first conversational agent
+  maintainer: Your Bot contributors
+artifactName: Your-Bot-${version}-${arch}.${ext}
+npmRebuild: false

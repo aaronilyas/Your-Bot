@@ -1,0 +1,63 @@
+{
+  "name": "@your-bot/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Your Bot secure local desktop host and conversation UI",
+  "author": "Your Bot contributors",
+  "homepage": "https://github.com/aaronilyas/Your-Bot",
+  "desktopName": "your-bot.desktop",
+  "type": "module",
+  "main": "dist/main/entry.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/main/host.d.ts",
+      "default": "./dist/main/host.js"
+    },
+    "./renderer": {
+      "types": "./dist/types/renderer/index.d.ts",
+      "default": "./dist/renderer-api.js"
+    },
+    "./mock": {
+      "types": "./dist/types/mock/transport.d.ts",
+      "default": "./dist/mock.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:browser": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:electron": "xvfb-run -a electron scripts/smoke-electron.mjs",
+    "build:icon": "node scripts/build-icon.mjs",
+    "start": "electron .",
+    "package": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "package:dir": "npm run build && electron-builder --linux --dir --config electron-builder.yml"
+  },
+  "dependencies": {
+    "@your-bot/contracts": "*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.27.4",
+    "jsdom": "^29.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^4.0.18"
+  }
+}
