@@ -5,17 +5,18 @@
 executes no shell, and contains no executor or UI implementation.
 
 ```ts
-import { createAdapters, normalizeAdapterError } from '@your-bot/adapters';
-import type { ContainmentLauncher } from '@your-bot/adapters';
+import { BubblewrapContainmentLauncher, createAdapters } from '@your-bot/adapters';
 
-// This must be implemented by the trusted host with an actual OS sandbox.
-// There is intentionally no bare-spawn fallback.
-declare const enforcedLauncher: ContainmentLauncher;
+// Host-approved entrypoint; bundle sibling application code into this one file.
+const scriptPath = '/opt/your-bot/harness.mjs';
+const containment = new BubblewrapContainmentLauncher({ scriptPath });
+// The matching ACP ProviderConfig must use:
+// command: '/usr/bin/node', args: [scriptPath]
 
 const adapters = createAdapters(settings.providers, {
   local: { timeoutMs: 120_000, maxToolRounds: 8 },
   acpByProvider: {
-    'my-harness': { launcher: enforcedLauncher, timeoutMs: 120_000 },
+    'my-harness': { containment, timeoutMs: 120_000 },
   },
 });
 const byId = new Map(adapters.map(adapter => [adapter.id, adapter]));
@@ -33,6 +34,9 @@ All public exports are in `src/index.ts`:
 - `createAdapters(configs: readonly ProviderConfig[], options?: AdapterFactoryOptions): AgentAdapter[]`.
 - `AcpAdapter`, `AcpAdapterOptions`; `OpenAICompatibleAdapter`, `LocalAdapterOptions`.
 - `ContainmentLauncher`, `HarnessLaunchRequest`, `ContainedHarness`, `NativePermissionPlan` types.
+- `BubblewrapContainmentLauncher`, `BubblewrapContainmentOptions`: concrete Linux
+  implementation. `acp.containment` and `acpByProvider[id].containment` inject it.
+  The original `launcher` option remains an alias; specifying both is rejected.
 - `AdapterError` and `normalizeAdapterError(error, signal?)`. Errors implement the
   frozen `StructuredError` fields, with safe generic messages; no upstream HTTP
   error bodies, stderr, API keys, command arguments, or arbitrary exception text.
@@ -91,10 +95,83 @@ fallback on HTTP errors.
 ## ACP v1 and enforced containment
 
 **Without an injected containment launcher, ACP is unavailable and run rejects
-`CONTAINMENT_UNAVAILABLE` before spawning anything, on every OS.** Merely finding
-`bwrap` on Linux does not prove the required boundary, so this package does not
-attempt a permissive generic bubblewrap invocation. A launcher is a trusted host
-capability, never a flag supplied by a harness or by provider settings.
+`CONTAINMENT_UNAVAILABLE` before spawning anything, on every OS.** The concrete
+`BubblewrapContainmentLauncher` verifies enforcement at launch time. A launcher is
+a trusted host capability, never a flag supplied by a harness or provider settings.
+
+### Supported concrete Linux launcher
+
+Requires Linux x86_64 LP64, glibc, root-administered `/usr`, `/usr/bin/bwrap`
+(tested 0.11.1, must support sized tmpfs and fd binds), and `/usr/bin/cc` with
+Linux/libc development headers. User, PID, network, IPC and mount namespaces must
+work, and seccomp filter TSYNC must be available. Denied namespaces, missing
+dependencies, unsupported executables/layouts, compilation errors or failed
+bootstrap confirmation fail closed. There is no shell or unsandboxed fallback.
+Compilation uses a fixed trusted C source and flags, clean environment, and a
+private owner-only temporary directory; it runs once per launch, outside the
+sandbox. Install these OS dependencies as part of trusted application setup.
+
+The only accepted commands are `/usr/bin/node` with one declared `.mjs` script,
+or `/usr/bin/python3` with one declared `.py` script. `args` must be exactly
+`[options.scriptPath]`. Runtime options, additional script arguments, arbitrary
+executables, wrapper scripts, environment overrides, static binaries, non-glibc
+ELF interpreters, and setuid/setgid or user-writable runtime executables are
+refused. The runtime must be a root-owned dynamic ELF64 x86_64 `/usr` binary.
+The runtime executable is pinned through an open fd; the canonical opened script
+is copied into private state (maximum 1 MiB), then into a readonly sandbox file.
+No entrypoint's sibling files or parent directory are mounted.
+
+The mount policy exposes only that runtime executable, the bootstrap library and
+script, `/usr/lib/x86_64-linux-gnu` and/or `/usr/lib64`, and the selected runtime's
+system modules. Python requires `/usr/lib/python3.<version>` and optionally binds
+`/usr/lib/python3/dist-packages` and `/usr/lib/locale`. Node optionally binds
+`/usr/lib/nodejs` and `/usr/share/nodejs`; `/harness/node_modules` points to the
+latter so bundled scripts can import distro-installed modules. These library
+trees must be root-administered and are part of the trusted runtime. This is not a
+computed per-library dependency closure. Other layouts may fail closed. `/usr/local`,
+`/etc`, host home/projects/tmp, settings, credentials and host environment are
+absent. `/proc` describes only the private PID namespace; `/dev` is minimal.
+The root scaffolding and runtime mounts are readonly. `/scratch` is one sized
+private tmpfs, and `/tmp` is a symlink to the same filesystem. ACP cwd is `/scratch`.
+
+A trusted `LD_PRELOAD` constructor sets hard limits and `no_new_privs`, installs
+an irreversible seccomp allowlist with TSYNC, and only then confirms readiness on
+a private pipe, closes the pipe and removes bootstrap environment variables.
+This runs before Node/Python executes the untrusted script. Distro runtime,
+dynamic loader and system library constructors are trusted. Native code inside a
+script remains subject to seccomp. Allowed clone flags require
+`CLONE_THREAD|CLONE_VM|CLONE_SIGHAND`, permit only libc threading flags, and reject
+namespace, vfork, exit-signal and other process-creation flags. `clone3` returns
+ENOSYS for safe libc fallback. `fork`, `vfork`, exec, socket creation (including
+Unix socketpair), connect/bind, ptrace, namespace/mount operations, io_uring, bpf,
+keyrings, pidfd access, process_vm and unknown syscalls return EPERM. Only narrowly
+scoped stdio metadata queries and safe terminal/descriptor queries are permitted.
+No filter removal, privilege elevation, limit raising or native permission grant
+is exposed. New runtime syscall requirements cause failure rather than relaxing
+the boundary automatically.
+
+Options and defaults: `scratchBytes` 64 MiB (combined `/scratch` + `/tmp`),
+`addressSpaceBytes` 8 GiB, `fileBytes` 16 MiB per file, `cpuSeconds` 30,
+`wallTimeMs` 120,000 and `startupTimeoutMs` 10,000. The startup confirmation deadline
+begins after compilation; the independent wall deadline includes all setup.
+Hard limits also disable core dumps, cap descriptors at 64 and stack at 8 MiB.
+Address space is a virtual-memory bound, **not an RSS/cgroup bound**; Node's V8
+old space is additionally fixed at 256 MiB and Wasm trap-handler reservations are
+disabled. Thread creation consumes those process-wide memory/CPU limits; there is
+no separate thread-count cap. Node native addons are disabled. The launcher kills
+the detached Bubblewrap supervisor group on abort/deadline, waits for teardown,
+and removes private setup files. PID namespace teardown and `--die-with-parent`
+cover runtime threads and host termination. A host crash can leave owner-only
+setup files in the host temporary directory; runtime scratch is kernel-owned
+tmpfs and disappears with containment.
+
+This policy denies **all networking** with no allow-network option. It supports
+stdio harnesses with in-process/system-library logic, rather than harnesses that
+require HTTP model servers, cloud credentials, subprocess tools, installed native
+Node addons, interactive authentication or arbitrary user modules. Actual tools
+must use `_your_bot/execute_tool` to reach core. The launcher has no
+`preparePermission`; native ACP grants stay denied. Other trusted launcher
+implementations can still implement the interface described below.
 
 `launcher.launch({command, args, signal})` must return a `ContainedHarness` with
 piped `process` stdio, an absolute **sandbox-internal** private-scratch `cwd`, and
@@ -207,15 +284,29 @@ npm run build -w @your-bot/adapters
 npm run test -w @your-bot/adapters
 ```
 
-The package's tests also match the root Vitest include pattern. Tests use local
+The package's tests also match the root Vitest include pattern. Protocol tests use local
 HTTP servers and a mock JSON-RPC stdio harness, exercising discovery, fragmented
 streaming, tool results, authorization forwarding/refusal, cancellation, timeout,
 limits, model selection, independent providers and cleanup. The test-only launcher
 uses an **unsandboxed deterministic fixture**, explicitly to test protocol behavior;
 it is never exported or used as a production fallback. These tests do not claim
-bubblewrap/seccomp enforcement success. No genuine OS sandbox or real production
-harness was validated here; production launch stays fail-closed until
-the host provides and separately tests its OS containment capability.
+bubblewrap/seccomp enforcement success by themselves.
+
+`test/bubblewrap.test.ts` adds **12 real, passing OS-isolation tests** on this Linux
+x86_64 host using `/usr/bin/bwrap`, `/usr/bin/cc`, Node and Python 3.14. They prove
+contained ACP initialization/streaming, native grant and filesystem-RPC refusal,
+core tool-extension routing, malicious direct-syscall denial, unchanged host
+sentinels in tmp/home, unreadable home secrets (including proc-root bypass probes),
+no inherited secret environment, readonly root/runtime, safe threads, sized
+scratch exhaustion, hard limits, abort/partial-startup cleanup, and wall teardown.
+Missing OS dependencies or denied isolation **fail** these tests on Linux x86_64;
+only other platforms are explicitly skipped. No real third-party production ACP
+harness or cloud/local inference engine was available; the end-to-end contained
+harnesses are deterministic fixtures. The full adapter suite has 74 passing tests.
+
+Containment references: [Bubblewrap source/lifecycle](https://github.com/containers/bubblewrap/blob/main/bubblewrap.c),
+[Linux seccomp filter behavior](https://man7.org/linux/man-pages/man2/seccomp.2.html),
+and [no_new_privs](https://man7.org/linux/man-pages/man2/PR_SET_NO_NEW_PRIVS.2const.html).
 
 Official ACP sources checked 2026-10-09:
 [initialization](https://agentclientprotocol.com/protocol/v1/initialization),

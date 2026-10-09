@@ -8,6 +8,8 @@ export type { AcpAdapterOptions } from './acp.js';
 export { OpenAICompatibleAdapter } from './local.js';
 export type { LocalAdapterOptions } from './local.js';
 export type { ContainedHarness, ContainmentLauncher, HarnessLaunchRequest, NativePermissionPlan } from './containment.js';
+export { BubblewrapContainmentLauncher } from './bubblewrap.js';
+export type { BubblewrapContainmentOptions } from './bubblewrap.js';
 export { AdapterError, normalizeAdapterError } from './errors.js';
 export { parseSse } from './sse.js';
 export { parseToolInvocation, TOOL_DEFINITION } from './tools.js';

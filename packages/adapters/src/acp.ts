@@ -9,6 +9,8 @@ import { parseToolInvocation } from './tools.js';
 
 export interface AcpAdapterOptions {
   /** Trusted host injection; without it, ACP fails closed and no process is spawned. */
+  containment?: ContainmentLauncher;
+  /** Backward-compatible alias; supplying both is rejected. */
   launcher?: ContainmentLauncher;
   timeoutMs?: number;
   shutdownTimeoutMs?: number;
@@ -34,7 +36,8 @@ export class AcpAdapter implements AgentAdapter {
     if (config.kind !== 'acp') throw new AdapterError('INVALID_CONFIG', 'ACP adapter requires an ACP provider.');
     this.config = { ...config, args: config.args ? [...config.args] : undefined };
     this.id = config.id;
-    this.launcher = options.launcher;
+    if (options.containment && options.launcher) throw new AdapterError('INVALID_CONFIG', 'Specify one ACP containment launcher.');
+    this.launcher = options.containment ?? options.launcher;
     this.runs = new RunManager(positiveInteger(options.timeoutMs ?? 120_000, 'timeoutMs'));
     this.shutdownMs = positiveInteger(options.shutdownTimeoutMs ?? 5_000, 'shutdownTimeoutMs');
     this.maxMessageBytes = positiveInteger(options.maxMessageBytes ?? 1_048_576, 'maxMessageBytes');
