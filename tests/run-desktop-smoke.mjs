@@ -13,4 +13,5 @@ await run('docker', ['build', '-f', 'tests/desktop.Dockerfile', '-t', 'your-bot-
 // The disposable container permits Chromium to establish its own namespace and
 // seccomp sandbox. No sandbox-disable flag, host mount or host policy change.
 await run('docker', ['run', '--rm', '--network', 'none', '--cap-add', 'SYS_ADMIN',
-  '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined', 'your-bot-validation:local']);
+  '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined',
+  '--security-opt', 'systempaths=unconfined', 'your-bot-validation:local']);

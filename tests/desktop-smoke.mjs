@@ -23,7 +23,11 @@ const server = createServer(async (request, response) => {
   assert.equal(request.headers.authorization, 'Bearer smoke-local-secret');
   response.setHeader('Content-Type', 'text/event-stream');
   const frame = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
-  if (payload.messages.at(-1).role === 'tool') { frame({ content: 'Approved Python calculated ' }); frame({ content: '42.' }); frame({}, 'stop'); }
+  if (payload.messages.at(-1).role === 'tool') {
+    const result = JSON.parse(payload.messages.at(-1).content);
+    console.log('NATIVE_TOOL_RESULT', JSON.stringify(result));
+    frame({ content: result.ok && result.value === 42 ? 'Approved Python calculated 42.' : `Python calculation failed: ${JSON.stringify(result)}` }); frame({}, 'stop');
+  }
   else {
     frame({ tool_calls: [{ index: 0, id: 'native-calculation', type: 'function', function: { name: 'execute_tool', arguments: JSON.stringify({ kind: 'skill', skillId: 'calculation', input: { operation: 'sum', values: [20, 22] } }) } }] });
     frame({}, 'tool_calls');
@@ -49,7 +53,7 @@ const approve = async expected => {
 const state = async () => {
   const result = await dispatch({ type: 'state.sync' }); assert.equal(result.ok, true, JSON.stringify(result)); return result.snapshot;
 };
-try {
+async function validateDesktop() { try {
   const entry = process.env.YOUR_BOT_SMOKE_ENTRY ?? '/validation/application.asar/dist/main/entry.js';
   await import(pathToFileURL(entry).href);
   window = await until(() => BrowserWindow.getAllWindows()[0]);
@@ -65,7 +69,7 @@ try {
     assert.ok(restored.sessions.some(session => session.messages.some(message => message.content === 'Approved Python calculated 42.')));
     console.log('INTEGRATED_DESKTOP_RESTART_OK: actual SQLite conversation restoration');
   } else {
-    await evaluate(`window.__smokeEvents=[]; window.yourBot.subscribe(event => window.__smokeEvents.push(event))`);
+    await evaluate(`window.__smokeEvents=[]; window.yourBot.subscribe(event => window.__smokeEvents.push(event)); void 0`);
     const configured = await dispatch({ type: 'settings.update', settings: { providers: [{ id: 'native-local', name: 'Native local model', kind: 'lmstudio', endpoint: `http://127.0.0.1:${server.address().port}/v1`, enabled: true, apiKey: 'smoke-local-secret' }] } });
     assert.equal(configured.ok, true, JSON.stringify(configured));
     assert.ok(!JSON.stringify(await state()).includes('smoke-local-secret'));
@@ -76,7 +80,7 @@ try {
     await until(() => evaluate(`!document.querySelector('button[aria-label="Send message"]').disabled`));
     await evaluate(`document.querySelector('button[aria-label="Send message"]').click()`);
     await approve(/tool.execute/);
-    await until(async () => (await bodyText()).includes('Approved Python calculated 42.'));
+    await until(async () => /Approved Python calculated 42\.|Python calculation failed:/.test(await bodyText()));
     const completed = await state(); const sessionId = completed.sessions[0].id;
     assert.ok(completed.sessions[0].messages.some(message => message.role === 'tool' && JSON.parse(message.content).result.value === 42));
     assert.ok(await evaluate(`window.__smokeEvents.some(event => event.type==='message.delta')`));
@@ -95,6 +99,7 @@ try {
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   app.once('will-quit', () => {
     try {
+      if (!restart) assert.ok(children.length > 0, 'Managed process observer saw no Python workers');
       assert.ok(children.every(child => child.exitCode !== null || child.signalCode !== null), 'Managed process survived gateway shutdown');
       console.log('INTEGRATED_DESKTOP_SHUTDOWN_OK: managed subprocesses terminated'); clearTimeout(watchdog);
     } catch (error) { console.error(error); app.exit(1); }
@@ -102,4 +107,7 @@ try {
   app.quit();
 } catch (error) {
   console.error(error); clearTimeout(watchdog); server.closeAllConnections(); server.close(); app.exit(1);
-}
+} }
+// Do not keep the main ESM module pending while waiting for windows: Electron
+// finishes startup after its entry module evaluates.
+void app.whenReady().then(validateDesktop);

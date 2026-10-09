@@ -4,10 +4,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { CommandPayload, DesktopEvent, DesktopGateway, ToolInvocation } from '@your-bot/contracts';
 import { createGateway } from '@your-bot/core';
-import { createAdapters } from '@your-bot/adapters';
+import { createAdapters, BubblewrapContainmentLauncher } from '@your-bot/adapters';
 import { createToolExecutor } from '@your-bot/executor';
+import { DesktopStore } from '../apps/desktop/src/renderer/store.js';
 import { inProcessTransport, localPrincipal } from './helpers.js';
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -36,7 +38,7 @@ async function modelServer(): Promise<string> {
   cleanup.push(async () => { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
   return `http://127.0.0.1:${(server.address() as {port:number}).port}/v1`;
 }
-async function fixture(autoApprove = true) {
+async function fixture(autoApprove = true, includeAcp = false) {
   const root = await mkdtemp(join(tmpdir(), 'your-bot-integration-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const endpoint = await modelServer();
@@ -44,8 +46,11 @@ async function fixture(autoApprove = true) {
   const probe = await executor.probe();
   expect(probe.supported, JSON.stringify(probe.error)).toBe(true);
   const config = { id: 'local', name: 'Integration local', kind: 'lmstudio' as const, endpoint, enabled: true };
+  const scriptPath = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url));
+  const acpConfig = { id: 'acp', name: 'Contained ACP', kind: 'acp' as const, command: '/usr/bin/node', args: [scriptPath], enabled: true };
+  const adapterOptions = { acp: { containment: new BubblewrapContainmentLauncher({ scriptPath }) } };
   const make = () => createGateway({ databasePath: join(root, 'state', 'gateway.sqlite'), localPrincipalId: localPrincipal.id, executor,
-    onSettingsChanged: settings => createAdapters(settings.providers.length ? settings.providers : [config]), });
+    onSettingsChanged: settings => createAdapters(settings.providers.length ? settings.providers : includeAcp ? [config, acpConfig] : [config], adapterOptions), });
   let gateway = await make();
   cleanup.push(() => gateway.close());
   const events: DesktopEvent[] = [];
@@ -64,7 +69,10 @@ async function fixture(autoApprove = true) {
     if (!result.ok || !result.taskId) throw new Error(JSON.stringify(result));
     return terminal(result.taskId);
   };
-  return { root, executor, dispatch, events, sessionId, tool, terminal, restart: async () => {
+  return { root, executor, dispatch, events, sessionId, tool, terminal, transport: {
+    dispatch: (command: Parameters<DesktopGateway['dispatch']>[0]) => gateway.dispatch(command, localPrincipal),
+    subscribe: (listener: (event: DesktopEvent) => void) => gateway.subscribe(listener, localPrincipal),
+  }, restart: async () => {
     await gateway.close();
     // Gateway close owns executor shutdown; a restarted host gets a new executor.
     const replacement = createToolExecutor({ environmentRoot: join(root, 'python') });
@@ -74,6 +82,22 @@ async function fixture(autoApprove = true) {
 }
 
 describe('integrated headless command transport, local model, SQLite and real Python sandbox', () => {
+  it('runs a real contained ACP harness through the same gateway and approved Python executor', async () => {
+    const f = await fixture(true, true);
+    const store = new DesktopStore(f.transport);
+    const unsubscribe = store.start(); cleanup.push(async () => unsubscribe());
+    // ACP model selection is optional; undefined must not cross the JSON wire.
+    const created = await store.command({ type: 'session.create', agentId: 'acp', modelId: undefined });
+    if (!created?.ok || !created.sessionId) throw new Error(JSON.stringify(created));
+    const accepted = await store.command({ type: 'message.send', sessionId: created.sessionId, content: 'calculate' });
+    if (!accepted?.ok || !accepted.taskId) throw new Error(JSON.stringify(accepted));
+    const finished = await f.terminal(accepted.taskId);
+    expect(finished.type, JSON.stringify(finished)).toBe('task.completed');
+    const reopened = await f.dispatch({ type: 'session.open', sessionId: created.sessionId });
+    if (!reopened.ok) throw new Error(JSON.stringify(reopened));
+    expect(reopened.session?.messages.at(-1)?.content).toBe('ACP Python result: 42');
+    expect(f.events.some(e => e.type === 'permission.requested' && e.request.taskId === accepted.taskId)).toBe(true);
+  });
   it('streams local responses, executes an approved model tool, and reopens persisted history after restart', async () => {
     const f = await fixture();
     const accepted = await f.dispatch({ type: 'message.send', sessionId: f.sessionId, content: 'calculate' });

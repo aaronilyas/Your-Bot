@@ -2,15 +2,15 @@
 
 Standalone Electron 44.7 / React / Vite 8 / strict TypeScript application for the frozen v1 contracts at `b133e1d`. All source and configuration for this workspace lives under `apps/desktop`.
 
-The renderer receives only `BackendTransport.dispatch/subscribe`. It has no core, provider, executor, Python, Node, filesystem, or identity API. The included Electron executable deliberately reports a disconnected backend until the parent integrates a gateway. Browser demo mode is explicit and in memory.
+The renderer receives only `BackendTransport.dispatch/subscribe`. It has no core, provider, executor, Python, Node, filesystem, or identity API. The production executable wires the real core, adapters and executor through `src/main/backend.ts`. Browser demo mode is explicit and in memory.
 
 ## Run and build
 
 From the repository root, using Node >=22.13:
 
 ```sh
-npm install
-npm run build -w @your-bot/contracts
+npm ci
+npm run build
 npm run test -w @your-bot/desktop
 npm run build -w @your-bot/desktop
 npm run dev -w @your-bot/desktop
@@ -24,7 +24,7 @@ npm run package:dir -w @your-bot/desktop  # unpacked Linux application
 npm run test:electron -w @your-bot/desktop # actual Electron/Xvfb smoke check; build first
 ```
 
-Artifacts are in `apps/desktop/release/`. The builder configuration pins Electron 44.7.0, enables ASAR, and includes the compiled renderer, main and sandbox preload. Packaging uses the workspace root's locally installed dependencies; the parent must update the root lockfile during integration. For final packaging, rebuild after wiring the actual gateway into the main entrypoint.
+Artifacts are in `apps/desktop/release/`. The builder configuration pins Electron 44.7.0, enables ASAR, and includes the compiled renderer, real backend main bundle and sandbox preload. Packaging uses the workspace root's locked dependencies. See the root README for system runtime prerequisites and `npm run test:desktop` for the complete native container validation.
 
 The packaged icon is committed at `resources/icon.png`; `npm run build:icon -w @your-bot/desktop` regenerates it from the native vector source `resources/icon.svg`.
 
@@ -44,7 +44,8 @@ import {
   type DesktopHost,
 } from '@your-bot/desktop';
 
-// Replace with the parent's actual factory; no implementation is assumed here.
+// Example for a different authenticated host. The production entry already
+// uses createApplicationGateway from src/main/backend.ts.
 const gatewayFactory: GatewayFactory = async ({ principal, userDataPath }) => {
   return makeYourGateway({ principal, userDataPath });
 };
@@ -61,7 +62,7 @@ app.on('window-all-closed', () => app.quit());
 
 Optional trusted host settings are `developmentURL` (unpackaged loopback HTTP origin only), `rendererFile`, and `preloadFile` (absolute build paths if the parent relocates outputs). Default assets are adjacent `dist/renderer/index.html` and `dist/preload/index.cjs`. `SECURE_WEB_PREFERENCES` is also exported for inspection. Do not expose these options to renderer commands.
 
-Wire the factory in `src/main/entry.ts` and include the parent's dependencies in this package before rebuilding; the current disconnected factory is intentional. The host bundle includes its dependencies; it excludes Electron. Avoid importing `@your-bot/desktop` from the renderer.
+The actual factory is wired in `src/main/entry.ts`. The host bundle includes backend dependencies and excludes Electron. Avoid importing `@your-bot/desktop` from the renderer.
 
 Renderer/library exports:
 
@@ -82,12 +83,12 @@ import { createMockTransport, type MockTransportOptions } from '@your-bot/deskto
 - Preload is bundled CommonJS, compatible with `sandbox: true`. `window.yourBot` exposes exactly `dispatch(command)` and `subscribe(listener)`, never raw IPC or the Electron event argument.
 - Main checks the exact WebContents, main frame and expected URL for each IPC call. It validates every command against strict v1 schemas, rejects extra identity/scope fields and prototype keys, bounds payload size/depth and concurrent dispatches, and binds identity itself.
 - Production CSP denies all network connections, inline scripts/styles, frames, plugins and form submission. Main additionally restricts asset requests to the renderer directory, blocks navigation and redirects, rejects popup/webview creation, and denies browser permissions. Development relaxations are limited to an explicitly configured loopback Vite origin; packaged builds reject development URLs.
-- All `ProviderConfig.apiKey` values are removed from outgoing command snapshots and snapshot events, without mutating gateway storage. Provider settings UI edits endpoints and configuration; it never displays or requests API keys. The parent manages credentials in its protected local store and should preserve an existing key when `settings.update` omits `apiKey`. No credential-management extension to the frozen contract was added.
+- All `ProviderConfig.apiKey` values are removed from outgoing command snapshots and snapshot events, without mutating gateway storage. Settings accepts newly entered keys in a password field, never reads stored keys back, preserves an existing key when omitted, and offers explicit removal. Core keeps credentials in its protected local SQLite store; storage is not encrypted at rest.
 - The gateway owns command deduplication, sessions, message persistence, endpoint validation, credential storage, actual model discovery, task cancellation, tool containment and permission authorization. It must send principal-scoped monotonic events and coherent snapshots. UI permission decisions carry only `requestId/outcome/scope` and cannot change the requested paths, packages or operation.
 - The permission modal shows full paths, access modes, packages, capability, reason and session. Approval scopes are once or task only; denial is explicit. Pending approvals disappear on task completion, cancellation or failure. Dialogs trap focus and make the background inert.
 - Model/tool/message output is rendered as React text, with safe fenced-code formatting and no HTML interpretation. Streaming and activity buffers are bounded. Composer handles IME, Enter versus Shift+Enter, session-specific drafts, failed commands and disconnected/loading states. Automatic retries only synchronize state; they never resend a message or permission decision.
 
-No frozen contract change is required. Session titles are created by the gateway; rename is not available in v1. Existing ACP launch command/args are preserved in settings, and process containment remains the parent's responsibility. The UI does not implement inference, storage, pairing, network hosting, Python, provider adapters, or an executor.
+No frozen contract change is required. Session titles are created by the gateway from the first message; rename is not available in v1. Settings configures supported single-script ACP providers; the production host injects the enforceable Linux launcher. The UI does not implement inference, storage, pairing, network hosting, Python, provider adapters, or an executor.
 
 ## Validation
 
@@ -96,3 +97,5 @@ Workspace Vitest tests (`.test.ts`) cover strict command validation, forged send
 `test:electron` loads the actual production file URL and bundled preload in Electron, checks sandbox/context isolation/no Node integration, exercises dispatch, verifies identity binding/redaction/forged-command rejection, and checks the rendered DOM and production CSP. It fails if the OS blocks sandbox startup; a sandbox startup failure is not a passing runtime check.
 
 Implementation validation on this worktree: contracts local build passed; desktop strict typecheck and production build passed; all 21 Vitest tests passed both through the workspace command and `npm test -- apps/desktop/tests`; Linux x64 AppImage and amd64 deb packaging passed; compiled mock export dispatch smoke passed. Native Electron/Xvfb smoke was attempted, but startup aborted because the helper is not setuid/root-owned. A user-namespace fallback also aborted with “No usable sandbox!” on this AppArmor-restricted host. T3 browser preview was blocked by the same host sandbox restriction. No sandbox was disabled to obtain a passing check.
+
+Final integration supersedes that initial native-worktree limitation: the root `npm run test:desktop` workflow passed against the real packaged gateway/adapters/executor in a disposable Linux container with both sandboxes enabled, including actual permission dialog, Python calculation, running-worker cancellation, shutdown and SQLite restart. See [validation evidence](../../docs/validation.md).

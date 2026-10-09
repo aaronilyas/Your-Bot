@@ -5,7 +5,7 @@ const snapshot = { sessions: [], agents: [{ id: 'smoke-agent', name: 'Smoke agen
 let boundPrincipal;
 const watchdog = setTimeout(() => { console.error('DESKTOP_SMOKE_TIMEOUT'); app.exit(1); }, 15000);
 let host;
-try {
+async function validateHost() { try {
   host = await createDesktopHost({ gatewayFactory: ({ principal }) => {
     boundPrincipal = principal;
     return { async dispatch(command, identity) { assert.equal(identity, boundPrincipal); return { ok: true, commandId: command.id, snapshot }; }, subscribe() { return () => {}; }, async requestPermission() { throw new Error('unused'); }, async cancelTask() {}, async close() {} };
@@ -26,4 +26,5 @@ try {
   assert.match(result.csp, /connect-src 'none'/);
   console.log('DESKTOP_SMOKE_OK: packaged renderer, sandbox preload, identity binding, credential redaction, command rejection, CSP');
   await host.close(); clearTimeout(watchdog); app.exit(0);
-} catch (error) { console.error(error); if (host) await host.close(); clearTimeout(watchdog); app.exit(1); }
+} catch (error) { console.error(error); if (host) await host.close(); clearTimeout(watchdog); app.exit(1); } }
+void app.whenReady().then(validateHost);

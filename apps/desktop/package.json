@@ -1,6 +1,7 @@
 {
   "name": "@your-bot/desktop",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "description": "Your Bot secure local desktop host and conversation UI",
   "author": "Your Bot contributors",

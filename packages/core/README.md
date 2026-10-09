@@ -96,8 +96,11 @@ allow. `once` grants are consumed by one invocation attempt, including a denied
 attempt; `task` grants cover only the same capability and exact approved paths /
 package strings within that task. Other paths/packages generate new approvals.
 Tool execution is serialized so concurrent calls cannot reuse a once grant.
-`tool.execute` has capability-level granularity within the task because v1 has
-no invocation scope field. File and package grants remain exact.
+Generic `tool.execute` grants have capability-level granularity within the task.
+Custom Python requests additionally bind the complete code and SHA-256 in the
+request reason; different code requires a different approval. File and package
+grants remain exact. Files are requested individually, and each writable mount
+requires a separate read grant, including for a new write target.
 
 While an executor awaits its `context.requestPermission`, an authorized grant
 is appended to that same `context.authorization.grants` array. A denial adds
