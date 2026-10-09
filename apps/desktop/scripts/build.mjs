@@ -1,0 +1,13 @@
+import { build as bundle } from 'esbuild';
+import { build as viteBuild } from 'vite';
+import { execFileSync } from 'node:child_process';
+import { copyFile } from 'node:fs/promises';
+await viteBuild();
+const common = { bundle: true, sourcemap: true, platform: 'node', target: 'node22', external: ['electron'], format: 'esm' };
+await bundle({ ...common, entryPoints: ['src/main/entry.ts', 'src/main/host.ts'], outdir: 'dist/main' });
+await bundle({ ...common, format: 'cjs', entryPoints: ['src/preload/index.ts'], outfile: 'dist/preload/index.cjs' });
+await bundle({ bundle: true, sourcemap: true, platform: 'browser', target: 'es2022', format: 'esm', external: ['react', 'react-dom', 'react/jsx-runtime'], entryPoints: ['src/renderer/index.ts'], outfile: 'dist/renderer-api.js' });
+await bundle({ bundle: true, platform: 'browser', target: 'es2022', format: 'esm', entryPoints: ['src/mock/transport.ts'], outfile: 'dist/mock.js' });
+execFileSync('npx', ['tsc', '-p', 'tsconfig.json', '--emitDeclarationOnly'], { stdio: 'inherit' });
+await copyFile('src/renderer/styles.css', 'dist/styles.css');
+await copyFile('src/renderer/theme.css', 'dist/theme.css');
