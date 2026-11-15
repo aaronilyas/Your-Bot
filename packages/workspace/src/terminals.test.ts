@@ -297,7 +297,7 @@ describe('process control', () => {
     const started = Date.now();
     const id = await run(['-e', `
       const { spawn } = require('child_process');
-      const child = spawn(process.execPath, ['-e', ${JSON.stringify(LONG)}], { stdio: 'inherit' });
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(LONG)}], { stdio: ['ignore', 'inherit', 'inherit'] });
       child.unref();
       process.stdout.write('GRANDCHILD ' + child.pid + '\\n');
     `]);
@@ -306,7 +306,7 @@ describe('process control', () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     const pid = Number(/GRANDCHILD (\d+)/.exec(result.output)![1]);
     if (process.platform !== 'win32') await host.releaseTerminal(id);
-    else process.kill(pid); // Windows cannot reach orphans after the leader exits (see README)
+    else try { process.kill(pid); } catch { /* already gone */ } // Windows cannot reach orphans after the leader exits (see README)
     await waitFor(() => !pidAlive(pid));
   });
 });

@@ -128,12 +128,13 @@ export async function readTextFile(root: string, canonicalPath: string, options:
 }
 
 async function renameReplacing(from: string, to: string): Promise<void> {
-  // Windows refuses to replace a file that antivirus/indexers briefly hold open.
+  // Windows refuses to replace a file that another process (reader, antivirus, indexer) has open.
+  // Retry for about two seconds before giving up.
   const transient = new Set(['EPERM', 'EACCES', 'EBUSY']);
   for (let attempt = 0; ; attempt++) {
     try { await rename(from, to); return; } catch (error) {
-      if (process.platform !== 'win32' || !transient.has(errnoOf(error) ?? '') || attempt >= 8) throw error;
-      await new Promise(resolve => setTimeout(resolve, 15 * (attempt + 1)));
+      if (process.platform !== 'win32' || !transient.has(errnoOf(error) ?? '') || attempt >= 24) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(10 * (attempt + 1), 150)));
     }
   }
 }

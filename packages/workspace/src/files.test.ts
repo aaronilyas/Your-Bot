@@ -124,13 +124,17 @@ describe('writeTextFile', () => {
     const seen = new Set<string>();
     const reader = (async () => {
       while (!stop) {
-        const content = await readFile(path, 'utf8');
-        seen.add(content === a ? 'a' : content === b ? 'b' : `torn:${content.length}`);
+        const content = await readFile(path, 'utf8').catch(() => undefined); // Windows may briefly deny/miss during a replace
+        if (content !== undefined) seen.add(content === a ? 'a' : content === b ? 'b' : `torn:${content.length}`);
+        await new Promise(resolve => setTimeout(resolve, 3)); // give a Windows rename a gap between opens
       }
     })();
-    for (let i = 0; i < 8; i++) await host.writeTextFile(root, path, i % 2 === 0 ? b : a, { signal: signal() });
-    stop = true;
-    await reader;
+    try {
+      for (let i = 0; i < 8; i++) await host.writeTextFile(root, path, i % 2 === 0 ? b : a, { signal: signal() });
+    } finally {
+      stop = true;
+      await reader;
+    }
     expect([...seen].filter(value => value.startsWith('torn'))).toEqual([]);
   });
 
