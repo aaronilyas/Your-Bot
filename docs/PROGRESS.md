@@ -49,9 +49,16 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   Limitation: Grok reports models via `session/new.models`, not configOptions, so trusted Grok
   bots must leave modelId unset until P8 adds that path.
 
+- P9 desktop UI v2 merged (72 desktop tests): v2 IPC (strict schemas, main-owned principal now
+  with mcp.call, one extra preload API `chooseDirectory`), bots/trusted warning, approvals with
+  "Always allow…", permissions+audit, routines, notifications, devices/pairing, provider launch
+  mode. Not yet seen in a real browser/Electron window (CSS unverified) — run test:desktop and a
+  visual check at the end. Open: the UI sends the browser preset as {preset:'browser', command:'npx'};
+  P5's broker only expands presets with an empty command, so the runtime (P8 merge) must wrap the
+  broker to always `expandPreset` configs that carry `preset`. Core should bound notification text.
+
 ## In flight
-Wave 2: P4 continuity+routines (feature/p4-continuity-routines),
-P9 desktop UI v2 (feature/p9-desktop-v2). P8 runtime+headless host. Keep ≤5 concurrent delegates on this
+Wave 2: P4 continuity+routines (feature/p4-continuity-routines). P8 runtime+headless host. Keep ≤5 concurrent delegates on this
 4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
 
 ## Next

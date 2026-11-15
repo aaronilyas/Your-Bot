@@ -61,7 +61,7 @@ async function validateDesktop() { try {
   const prefs = window.webContents.getLastWebPreferences();
   assert.equal(prefs.sandbox, true); assert.equal(prefs.contextIsolation, true); assert.equal(prefs.nodeIntegration, false);
   assert.equal(await evaluate('typeof require'), 'undefined');
-  assert.deepEqual(await evaluate('Object.keys(window.yourBot).sort()'), ['dispatch', 'subscribe']);
+  assert.deepEqual(await evaluate('Object.keys(window.yourBot).sort()'), ['chooseDirectory', 'dispatch', 'subscribe']);
   const forged = await evaluate(`window.yourBot.dispatch({version:1,id:'forged-owner',type:'state.sync',principalId:'admin'})`);
   assert.equal(forged.ok, false);
   if (restart) {
