@@ -177,6 +177,7 @@ export class Store {
     return this.readBot(row);
   }
   findBot(id: string, owner: string): Bot | undefined { try { return this.getBot(id, owner); } catch { return undefined; } }
+  botOwners(): string[] { return (this.db.prepare('SELECT DISTINCT owner FROM bots').all() as Row[]).map(row => row.owner as string); }
   bots(owner: string): Bot[] { return (this.db.prepare('SELECT value,secrets FROM bots WHERE owner=? ORDER BY rowid').all(owner) as Row[]).map(row => this.readBot(row)); }
   defaultBot(owner: string, agentId: string): Bot | undefined {
     const row = this.db.prepare('SELECT value,secrets FROM bots WHERE owner=? AND default_agent=?').get(owner, agentId) as Row | undefined;

@@ -74,6 +74,8 @@ describe('identity and owner-based data model', () => {
       { type: 'bot.update' as const, botId: trusted.id, patch: { mcpServers: [{ id: 'x', name: 'X', enabled: true, transport: 'stdio' as const, command: '/bin/true' }] } },
       { type: 'device.list' as const }, { type: 'device.pair.start' as const }, { type: 'device.revoke' as const, deviceId: 'phone' },
     ]) expect(await f.gateway.dispatch(cmd(payload), device)).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
+    const trustedSession = await botSession(f.gateway, trusted.id);
+    expect(await f.gateway.dispatch(cmd({ type: 'session.selectAgent', sessionId: trustedSession, agentId: 'fake' }), device)).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
     // Non-owner-only management stays possible with the settings capability.
     ok(await f.gateway.dispatch(cmd({ type: 'bot.update', botId: trusted.id, patch: { instructions: 'Be careful' } }), device));
     // Snapshots: devices/settings for the local owner only; device revocation events never reach devices.

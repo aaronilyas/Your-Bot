@@ -117,7 +117,7 @@ export class Gateway {
     this.setAdapters(this.options.adapters ?? []);
     const settings = this.store.settings(this.localId);
     this.rememberSecrets(settings);
-    for (const owner of new Set(this.store.allSessions().map(entry => entry.owner))) for (const bot of this.store.bots(owner)) this.rememberBotSecrets(bot);
+    for (const owner of this.store.botOwners()) for (const bot of this.store.bots(owner)) this.rememberBotSecrets(bot);
     if (this.options.onSettingsChanged) {
       const replacement = await this.dependency(Promise.resolve(this.options.onSettingsChanged(clone(settings), { signal: this.lifetime.signal })));
       if (replacement) await this.replaceAdapters(replacement);
@@ -425,6 +425,9 @@ export class Gateway {
       case 'session.selectAgent': {
         const session = this.store.getSession(command.sessionId, owner);
         if (this.busy(session.id)) throw new GatewayError('SESSION_BUSY', 'Cancel the active task before changing agent');
+        const current = session.botId ? this.store.findBot(session.botId, owner) : undefined;
+        // Choosing which agent runs uncontained for a trusted bot is an owner decision (as for bot.update).
+        if (current?.profile === 'trusted') this.requireLocalOwner(principal, 'Changing the agent of a trusted bot');
         this.availableAgent(command.agentId, command.modelId);
         session.agentId = command.agentId; delete session.modelId; if (command.modelId) session.modelId = command.modelId;
         // A session of a per-agent default bot follows the agent; a custom bot keeps its session.
