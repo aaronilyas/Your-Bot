@@ -3,21 +3,31 @@ import { hostname } from 'node:os';
 import type {
   AgentAdapter, AgentAdapterV2, AgentInfo, AgentRunContextV2, AgentUpdate, AnyCommandResult, AnyDesktopCommand, AppSettingsV2,
   AppSnapshotV2, AuthorizationContext, Bot, BotInput, CapabilityV2, CommandResultV2, ContractVersion, DesktopEvent, DesktopEventV2,
-  DeviceManager, EventPayloadV2, ExecutionProfile, GrantAuditEntry, JsonValue, McpBroker, McpCall, McpProxySession, McpServerConfig,
-  PermissionDecision, PermissionDecisionV2, PermissionInputV2, PermissionRequest, PermissionRequestV2, Principal, PrincipalV2,
-  SecretCipher, SessionV2, StandingGrant, ToolExecutionContext, ToolExecutor, ToolInvocation, ToolResult, Unsubscribe, WorkspaceHost,
-  WorkspaceHostChannel, DesktopCommand, DesktopCommandV2,
+  DeviceManager, EventPayloadV2, ExecutionProfile, GrantAuditEntry, JsonValue, McpBroker, McpBuiltinTool, McpCall, McpProxySession, McpServerConfig,
+  MemoryEntry, Notifier, OwnerNotification, PermissionDecision, PermissionDecisionV2, PermissionInputV2, PermissionRequest, PermissionRequestV2,
+  Principal, PrincipalV2, Routine, RoutineInput, RoutineRun, SecretCipher, SessionV2, SkillCatalog, SkillInfo, StandingGrant, ToolExecutionContext,
+  ToolExecutor, ToolInvocation, ToolResult, Unsubscribe, WorkspaceHost, WorkspaceHostChannel, DesktopCommand, DesktopCommandV2, ChatMessage,
 } from '@your-bot/contracts';
+import {
+  AGENT_MEMORY_LIMIT, bounded, bytes, composeInstructions, fallbackSummary, MEMORY_ENTRIES_LIMIT, memorySection, OWNER_MEMORY_LIMIT, SUMMARY_LIMIT,
+} from './continuity.js';
 import { normalizeStandingScope, active, matches, standingForbidden, subject } from './grants.js';
+import { checkSchedule, latestOccurrences, nextOccurrence, type ScheduleState } from './schedule.js';
 import { createHostChannel, type HostPermission } from './host-channel.js';
 import { canonicalDirectory, canonicalPaths, isWithin } from './paths.js';
 import { SecretBox } from './secrets.js';
 import { Store } from './storage.js';
 import { assert, GatewayError, record, stableJson, string, validateCommand, validateInvocation, validateJson, validateToolResult } from './validation.js';
-import { validateBotInput, validateCommandV2, validatePermissionInputV2, validatePrincipalV2, validateSettingsV2 } from './validation-v2.js';
+import { CAPABILITIES_V2, validateBotInput, validateCommandV2, validatePermissionInputV2, validatePrincipalV2, validateRoutineInput, validateSettingsV2 } from './validation-v2.js';
 import { eventFor, isV1Capability, principalV1, requestV1, sessionV1, settingsV1, snapshotV1 } from './versioning.js';
 
 export type AnyAgentAdapter = AgentAdapter | AgentAdapterV2;
+/** Injectable time source for routines (tests use a fake clock). Timers may fire late (sleep); the scheduler detects that. */
+export interface GatewayClock {
+  now(): number;
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
 export interface GatewayOptions {
   /** Use a dedicated application-data directory; core enforces 0700 on its parent and 0600 on the DB. */
   databasePath: string;
@@ -39,6 +49,16 @@ export interface GatewayOptions {
   secretCipher?: SecretCipher;
   /** v2: host identity for multi-host clients. Default: a persisted random id and the OS host name. */
   host?: { id: string; name: string };
+  /** v2 (P4): global + workspace skills; enabled skill bodies are composed into run instructions. */
+  skillCatalog?: SkillCatalog;
+  /** v2 (P4): called for every new owner notification (approval required, routine failed/interrupted/skipped). */
+  notifier?: Notifier;
+  /** v2 (P4): routine scheduler clock. Default: wall clock with real timers. */
+  clock?: GatewayClock;
+  /** v2 (P4): capabilities of the local-owner principal routines run as. Default: every capability except 'settings'. */
+  routineCapabilities?: CapabilityV2[];
+  /** v2 (P4): upper bound for `adapter.summarize` during compaction before the deterministic fallback is used. Default 60 s. */
+  summarizeTimeoutMs?: number;
 }
 
 type Grant = { request: PermissionRequestV2; scope: PermissionDecision['scope']; decidedBy?: string };
@@ -47,7 +67,7 @@ type Task = {
   adapter?: AnyAgentAdapter; text: string; terminal: boolean; grants: Grant[];
   toolQueue: Promise<void>; execution?: ToolExecutionContext; emittedToolError?: ToolResult;
   deltaPending: string; outputPending: Map<string, {stream: 'stdout' | 'stderr' | 'status'; toolCallId: string; text: string}>;
-  bot?: Bot; profile: ExecutionProfile; workspace?: string; routineRunId?: string;
+  bot?: Bot; profile: ExecutionProfile; workspace?: string; routineRunId?: string; routineId?: string;
   host?: WorkspaceHostChannel; terminals: Set<string>; mcp?: McpProxySession; released?: Promise<void>;
 };
 type Settlement = { decidedBy?: string; via: 'interactive' | 'policy'; grantId?: string };
@@ -70,6 +90,21 @@ export const ownerOf = (principal: PrincipalV2 | Principal): string => (principa
 const ADAPTER_STATE_LIMIT = 64 * 1024;
 const MIN_REGISTERED_MCP_SECRET = 8;
 const AUDIT_DEFAULT_LIMIT = 50;
+const RUNS_DEFAULT_LIMIT = 50;
+const SNAPSHOT_RECENT_RUNS = 50;
+const SNAPSHOT_NOTIFICATIONS = 100;
+const UNFINISHED_RUNS = ['queued', 'running', 'blocked'];
+const DEFAULT_KEEP_RECENT = 10;
+const DEFAULT_MAX_CATCH_UP = 5;
+/** A timer firing later than this after an occurrence (sleep, suspended host) counts the occurrence as missed. */
+const LATE_GRACE_MS = 60_000;
+/** Timers never wait longer than this, so wall-clock jumps are noticed. */
+const MAX_TIMER_MS = 60 * 60_000;
+const systemClock: GatewayClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, ms) => { const handle = setTimeout(callback, ms); handle.unref?.(); return handle; },
+  clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 /** MCP env/header values replaced with "" (keys kept), as required for every outgoing bot. */
 export function publicBot(bot: Bot): Bot {
@@ -96,9 +131,21 @@ export class Gateway {
   private readonly lifetime = new AbortController();
   private readonly deletingSessions = new Set<string>();
   private hostInfo = { id: '', name: '' };
+  private readonly clock: GatewayClock;
+  private readonly routineCapabilities: CapabilityV2[];
+  private timer?: unknown;
+  private readonly compacting = new Set<string>();
+  private readonly background = new Set<Promise<unknown>>();
+  private readonly skillCache = new Map<string, SkillInfo[]>();
   constructor(private readonly options: GatewayOptions, private readonly acceptV2: boolean) {
     this.localId = options.localPrincipalId ?? 'local';
     string(this.localId, 'local principal id', 256);
+    this.clock = options.clock ?? systemClock;
+    assert(typeof this.clock.now === 'function' && typeof this.clock.setTimeout === 'function' && typeof this.clock.clearTimeout === 'function', 'Invalid clock');
+    const capabilities = options.routineCapabilities ?? CAPABILITIES_V2.filter(capability => capability !== 'settings');
+    assert(Array.isArray(capabilities) && capabilities.every(capability => CAPABILITIES_V2.includes(capability)) && new Set(capabilities).size === capabilities.length, 'Invalid routine capabilities');
+    this.routineCapabilities = [...capabilities];
+    assert(options.summarizeTimeoutMs === undefined || (Number.isSafeInteger(options.summarizeTimeoutMs) && options.summarizeTimeoutMs > 0), 'Invalid summarize timeout');
     assert(options.cleanupTimeoutMs === undefined || (Number.isSafeInteger(options.cleanupTimeoutMs) && options.cleanupTimeoutMs > 0), 'Invalid cleanup timeout');
     if (options.host !== undefined) { record(options.host, ['id', 'name']); string(options.host.id, 'host id', 256); string(options.host.name, 'host name', 256); }
     const box = new SecretBox(options.secretCipher);
@@ -133,6 +180,10 @@ export class Gateway {
       session.botId = this.ensureDefaultBot(owner, session.agentId).id;
       this.store.saveSession(owner, session);
     }
+    // Routines: unfinished runs from the previous process are interrupted (never resumed silently),
+    // then missed occurrences are handled by each routine's missed-run policy.
+    this.recoverRoutines();
+    this.tick();
   }
   private setAdapters(adapters: readonly AnyAgentAdapter[]): void {
     const ids = new Set<string>();
@@ -292,6 +343,13 @@ export class Gateway {
         this.require(principal, 'settings'); return;
       case 'device.pair.start': case 'device.list': case 'device.revoke':
         this.requireLocalOwner(principal, 'Device management'); return;
+      case 'memory.add': case 'memory.delete':
+        // Memory is owner data: the local owner, or a principal holding `settings`.
+        this.require(principal, 'conversation');
+        if (!this.isLocalOwner(principal)) this.require(principal, 'settings');
+        return;
+      case 'routine.create': case 'routine.update': case 'routine.delete': case 'routine.runNow':
+        this.require(principal, 'settings'); return;
       default:
         this.require(principal, 'conversation');
         if (command.type === 'tool.run') this.require(principal, 'tool.execute');
@@ -312,8 +370,10 @@ export class Gateway {
       lastSequence: this.store.lastSequence(owner),
       bots: this.store.bots(owner).map(publicBot),
       grants: this.store.grants(owner).filter(grant => active(grant, now)),
-      // Owned by P4 (routines, notifications, skills); empty until implemented.
-      routines: [], routineRuns: [], notifications: [], skills: [],
+      routines: this.store.routines(owner).map(entry => entry.routine),
+      routineRuns: [...this.store.runsWithStatus(UNFINISHED_RUNS, owner).map(entry => entry.run), ...this.store.recentRuns(owner, UNFINISHED_RUNS, SNAPSHOT_RECENT_RUNS)],
+      notifications: this.store.notifications(owner, SNAPSHOT_NOTIFICATIONS),
+      skills: await this.skillList(owner).catch(error => { if (this.closed) throw error; return []; }),
       devices, host: clone(this.hostInfo),
     });
   }
@@ -494,6 +554,7 @@ export class Gateway {
         const bot: Bot = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
         this.store.saveBot(owner, bot); this.rememberBotSecrets(bot);
         this.emit(owner, { type: 'bot.updated', bot: publicBot(bot) });
+        this.skillCache.delete(owner); // Workspace skills follow bot workspaces.
         return { ...success, bot: publicBot(bot) };
       }
       case 'bot.update': {
@@ -512,10 +573,14 @@ export class Gateway {
         const bot: Bot = { ...input, id: existing.id, createdAt: existing.createdAt, updatedAt: new Date().toISOString() };
         this.store.saveBot(owner, bot, this.store.isDefaultBot(bot.id) ? existing.agentId : undefined); this.rememberBotSecrets(bot);
         this.emit(owner, { type: 'bot.updated', bot: publicBot(bot) });
+        this.skillCache.delete(owner); // Workspace skills follow bot workspaces.
         return { ...success, bot: publicBot(bot) };
       }
       case 'bot.delete': {
         const bot = this.store.getBot(command.botId, owner);
+        // Routines go first, so cancelling their tasks below never starts a queued run of this bot.
+        for (const { routine } of this.store.routines(owner)) if (routine.botId === bot.id) await this.deleteRoutine(owner, routine.id);
+        this.store.deleteBotMemory(owner, bot.id);
         const sessions = this.store.sessions(owner).filter(session => session.botId === bot.id).map(session => session.id);
         await this.deleteSessions(owner, sessions);
         const now = new Date().toISOString();
@@ -525,6 +590,7 @@ export class Gateway {
         }
         this.store.deleteBot(bot.id, owner);
         this.emit(owner, { type: 'bot.deleted', botId: bot.id });
+        this.skillCache.delete(owner);
         return success;
       }
       case 'grant.create': {
@@ -561,21 +627,476 @@ export class Gateway {
         if (device) this.emit(owner, { type: 'device.updated', device }, this.localId);
         return { ...success, devices: list };
       }
-      case 'memory.list': case 'memory.add': case 'memory.delete': case 'session.compact':
-      case 'routine.create': case 'routine.update': case 'routine.delete': case 'routine.runNow': case 'routine.runs':
-      case 'notification.ack': case 'skills.refresh':
-        throw new GatewayError('NOT_SUPPORTED', `${command.type} is not supported by this host yet`);
+      case 'memory.list': return { ...success, memory: this.store.memory(owner, this.store.getBot(command.botId, owner).id) };
+      case 'memory.add': {
+        const bot = this.store.getBot(command.botId, owner);
+        const content = command.content.trim();
+        if (!content) throw new GatewayError('INVALID_INPUT', 'Memory content is empty');
+        if (bytes(content) > OWNER_MEMORY_LIMIT) throw new GatewayError('LIMIT_EXCEEDED', 'Memory entries are limited to 8 KiB');
+        return { ...success, memory: this.addMemory(owner, bot, content, 'owner') };
+      }
+      case 'memory.delete': {
+        const bot = this.store.getBot(command.botId, owner);
+        if (!this.store.deleteMemory(owner, bot.id, command.memoryId)) throw new GatewayError('NOT_FOUND', 'Memory entry not found');
+        const memory = this.store.memory(owner, bot.id);
+        this.emit(owner, { type: 'memory.updated', botId: bot.id, memory });
+        return { ...success, memory };
+      }
+      case 'session.compact': {
+        const session = this.store.getSession(command.sessionId, owner);
+        if (this.busy(session.id)) throw new GatewayError('SESSION_BUSY', 'Cancel the active task before compacting');
+        const compacted = await this.compact(owner, session.id, true);
+        return { ...success, sessionId: session.id, session: this.scrub(compacted ?? this.store.getSession(session.id, owner)) };
+      }
+      case 'skills.refresh': {
+        const skills = await this.skillList(owner, true);
+        this.emit(owner, { type: 'skills.updated', skills });
+        return { ...success, skills };
+      }
+      case 'notification.ack': {
+        const notification = this.store.getNotification(command.notificationId, owner);
+        if (!notification.acknowledgedAt) {
+          notification.acknowledgedAt = this.isoNow();
+          this.store.acknowledgeNotification(owner, notification);
+          this.emit(owner, { type: 'notification', notification });
+        }
+        return success;
+      }
+      case 'routine.create': return { ...success, routine: await this.createRoutine(owner, principal, command.routine) };
+      case 'routine.update': return { ...success, routine: await this.updateRoutine(owner, principal, command.routineId, command.patch) };
+      case 'routine.delete': { this.store.getRoutine(command.routineId, owner); await this.deleteRoutine(owner, command.routineId); return success; }
+      case 'routine.runNow': {
+        const { routine } = this.store.getRoutine(command.routineId, owner);
+        if (this.store.runsWithStatus(['queued'], owner).some(entry => entry.run.routineId === routine.id)) throw new GatewayError('SESSION_BUSY', 'A run of this routine is already queued');
+        const run = this.enqueueRun(owner, routine, 'manual', this.clock.now());
+        return { ...success, routine: this.store.getRoutine(routine.id, owner).routine, runs: [this.store.getRun(run.id)?.run ?? run] };
+      }
+      case 'routine.runs': {
+        const { routine } = this.store.getRoutine(command.routineId, owner);
+        return { ...success, runs: this.store.runs(owner, routine.id, command.limit ?? RUNS_DEFAULT_LIMIT) };
+      }
     }
   }
+  /* ------------------------------------------------------- continuity (P4) */
+
+  private isoNow(): string { return new Date(this.clock.now()).toISOString(); }
+  private track(promise: Promise<unknown>): void {
+    const tracked = promise.then(() => undefined, () => undefined);
+    this.background.add(tracked); void tracked.finally(() => this.background.delete(tracked));
+  }
+  private addMemory(owner: string, bot: Bot, content: string, source: MemoryEntry['source']): MemoryEntry[] {
+    if (this.store.memoryCount(owner, bot.id) >= MEMORY_ENTRIES_LIMIT) throw new GatewayError('LIMIT_EXCEEDED', `A bot keeps at most ${MEMORY_ENTRIES_LIMIT} memory entries`);
+    const entry: MemoryEntry = { id: randomUUID(), botId: bot.id, content: this.scrub(content), source, createdAt: new Date().toISOString() };
+    this.store.addMemory(owner, entry);
+    const memory = this.store.memory(owner, bot.id);
+    this.emit(owner, { type: 'memory.updated', botId: bot.id, memory });
+    return memory;
+  }
+  /**
+   * Core-served MCP tools for bots with memory enabled. The broker authorizes every call through
+   * `authorizeMcp` (serverId 'your_bot') before `handle` runs, so standing grants and live approval
+   * apply exactly as for upstream MCP servers.
+   */
+  private memoryBuiltins(task: Task): McpBuiltinTool[] {
+    const bot = task.bot!;
+    const usable = (signal: AbortSignal) => { if (!this.live(task) || signal?.aborted) throw new GatewayError('CANCELLED', 'Task is no longer active'); };
+    return [
+      {
+        name: 'remember',
+        description: `Save a short durable note (fact, preference, decision) to this bot's long-term memory. At most ${AGENT_MEMORY_LIMIT} bytes per note.`,
+        inputSchema: { type: 'object', properties: { content: { type: 'string', description: 'The note to remember.' } }, required: ['content'], additionalProperties: false },
+        handle: async (args, signal) => {
+          usable(signal);
+          const input = record(args, ['content']);
+          string(input.content, 'memory content', 65_536);
+          const content = input.content.trim();
+          if (!content) throw new GatewayError('INVALID_INPUT', 'Memory content is empty');
+          if (bytes(content) > AGENT_MEMORY_LIMIT) throw new GatewayError('LIMIT_EXCEEDED', `Memory notes are limited to ${AGENT_MEMORY_LIMIT} bytes`);
+          const memory = this.addMemory(task.owner, bot, content, 'agent');
+          return { saved: true, id: memory[0].id };
+        },
+      },
+      {
+        name: 'recall',
+        description: "Read notes from this bot's long-term memory, newest first. `query` filters by case-insensitive substring.",
+        inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, additionalProperties: false },
+        handle: async (args, signal) => {
+          usable(signal);
+          const input = record(args ?? {}, ['query', 'limit'], []);
+          if (input.query !== undefined) string(input.query, 'query', 1024, true);
+          if (input.limit !== undefined) assert(Number.isSafeInteger(input.limit) && (input.limit as number) >= 1 && (input.limit as number) <= 100, 'Invalid limit');
+          const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
+          const entries: JsonValue[] = []; let size = 0;
+          for (const entry of this.store.memory(task.owner, bot.id)) {
+            if (query && !entry.content.toLowerCase().includes(query)) continue;
+            size += bytes(entry.content);
+            if (entries.length >= ((input.limit as number | undefined) ?? 50) || size > 16 * 1024) break;
+            entries.push({ id: entry.id, content: entry.content, source: entry.source, createdAt: entry.createdAt });
+          }
+          return { entries };
+        },
+      },
+    ];
+  }
+  /** Skills of an owner: global plus the workspaces of the owner's bots. Cached until skills.refresh. */
+  private async skillList(owner: string, refresh = false): Promise<SkillInfo[]> {
+    const catalog = this.options.skillCatalog;
+    if (!catalog) return [];
+    const cached = this.skillCache.get(owner);
+    if (cached && !refresh) return clone(cached);
+    const workspaces = [...new Set(this.store.bots(owner).flatMap(bot => bot.workspace ? [bot.workspace] : []))];
+    const skills = await this.dependency(catalog.list(workspaces));
+    assert(Array.isArray(skills) && skills.length <= 10_000, 'Invalid skill list');
+    const list = this.scrub(clone(skills));
+    this.skillCache.set(owner, list);
+    return clone(list);
+  }
+  /**
+   * Composed run instructions: bot instructions, memory (when enabled; newest first, ≤ 8 KiB) and the
+   * bodies of enabled skills (global wins over a workspace skill with the same id), ≤ 64 KiB in total.
+   * Missing or invalid skills are skipped with a status update; the run continues.
+   */
+  private async instructionsFor(task: Task, bot: Bot): Promise<string> {
+    const memory = bot.memoryEnabled ? memorySection(this.store.memory(task.owner, bot.id)) : '';
+    const skills: {name: string; body: string}[] = [];
+    const skip = (id: string, why: string) => this.taskEvent(task, { type: 'task.status', taskId: task.id, sessionId: task.sessionId, status: `Skill ${id} was skipped: ${why}` });
+    if (bot.skills.length) {
+      const catalog = this.options.skillCatalog;
+      let available: SkillInfo[] | undefined;
+      if (catalog) {
+        try { available = await this.dependency(catalog.list(bot.workspace ? [bot.workspace] : [])); assert(Array.isArray(available), 'Invalid skill list'); }
+        catch (error) { if (this.closed) throw error; available = undefined; }
+      }
+      for (const id of bot.skills) {
+        if (!catalog || !available) { skip(id, 'skills are unavailable on this host'); continue; }
+        const info = available.find(skill => skill?.id === id && skill.source === 'global') ?? available.find(skill => skill?.id === id && skill.source === 'workspace');
+        if (!info) { skip(id, 'not found'); continue; }
+        if (info.error) { skip(id, 'invalid'); continue; }
+        try {
+          const body = await this.dependency(catalog.read(clone(info)));
+          string(body, 'skill body', 1_000_000, true);
+          skills.push({ name: typeof info.name === 'string' && info.name ? info.name.slice(0, 256) : id, body });
+        } catch (error) { if (this.closed) throw error; skip(id, 'unreadable'); }
+      }
+    }
+    return composeInstructions(bot.instructions, memory, skills);
+  }
+  /**
+   * Moves older messages to the archive (never deleted) and keeps `keepRecent` live messages plus a
+   * summary. Automatic compaction runs after a task when the bot has a policy and the session holds
+   * more than `maxMessages`; `session.compact` compacts on demand. Messages are identified by id, so
+   * messages appended while summarizing are kept.
+   */
+  private async compact(owner: string, sessionId: string, manual: boolean): Promise<SessionV2 | undefined> {
+    if (this.closed) return undefined;
+    if (this.compacting.has(sessionId)) { if (manual) throw new GatewayError('SESSION_BUSY', 'Compaction is already in progress'); return undefined; }
+    const session = this.store.getSession(sessionId, owner);
+    const policy = session.botId ? this.store.findBot(session.botId, owner)?.compaction : undefined;
+    if (!manual && (!policy || session.messages.length <= policy.maxMessages)) return undefined;
+    const keep = policy?.keepRecent ?? DEFAULT_KEEP_RECENT;
+    if (session.messages.length <= keep) return session;
+    const older = session.messages.slice(0, session.messages.length - keep);
+    this.compacting.add(sessionId);
+    try {
+      const summary = await this.summarize(session, older);
+      if (this.closed) return undefined;
+      let current: SessionV2;
+      try { current = this.store.getSession(sessionId, owner); } catch { return undefined; }
+      const ids = new Set(older.map(message => message.id));
+      const archived = current.messages.filter(message => ids.has(message.id));
+      if (!archived.length) return current;
+      current.messages = current.messages.filter(message => !ids.has(message.id));
+      current.summary = summary; current.compactedCount = (current.compactedCount ?? 0) + archived.length;
+      current.updatedAt = new Date().toISOString();
+      const clean = this.scrub(current);
+      this.store.compactSession(owner, clean, archived);
+      this.emit(owner, { type: 'session.updated', session: clean });
+      return clean;
+    } finally { this.compacting.delete(sessionId); }
+  }
+  /** `adapter.summarize` when available (bounded time, abortable), else the deterministic fallback. */
+  private async summarize(session: SessionV2, messages: ChatMessage[]): Promise<string> {
+    const adapter = this.adapters.get(session.agentId) as AgentAdapterV2 | undefined;
+    if (adapter && typeof adapter.summarize === 'function') {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      this.lifetime.signal.addEventListener('abort', abort, { once: true });
+      const timer = setTimeout(abort, this.options.summarizeTimeoutMs ?? 60_000);
+      try {
+        const stopped = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new GatewayError('CANCELLED', 'Summarize aborted')), { once: true }));
+        const result = await Promise.race([
+          adapter.summarize({ ...(session.summary ? { previousSummary: session.summary } : {}), messages: this.scrub(clone(messages)), signal: controller.signal }),
+          stopped,
+        ]);
+        if (typeof result === 'string' && result.trim()) return bounded(this.scrub(result.trim()), SUMMARY_LIMIT);
+      } catch { /* Fall back below. */ }
+      finally { clearTimeout(timer); controller.abort(); this.lifetime.signal.removeEventListener('abort', abort); }
+    }
+    return fallbackSummary(session.summary, messages);
+  }
+
+  /* --------------------------------------------------- notifications (P4) */
+
+  /** Strips control characters (except newline/tab) since text can include agent-influenced content. */
+  private static sanitizeNotificationText(text: string): string { return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); }
+
+  private notify(owner: string, input: Omit<OwnerNotification, 'id' | 'createdAt' | 'acknowledgedAt'>): void {
+    const title = Gateway.sanitizeNotificationText(input.title).slice(0, 200);
+    const body = Gateway.sanitizeNotificationText(input.body).slice(0, 1000);
+    const notification: OwnerNotification = this.scrub({ id: randomUUID(), ...input, title, body, createdAt: this.isoNow() });
+    this.store.addNotification(owner, notification);
+    this.emit(owner, { type: 'notification', notification });
+    try { this.options.notifier?.notify(clone(notification)); } catch { /* A failing notifier never affects routines. */ }
+  }
+
+  /* -------------------------------------------------------- routines (P4) */
+
+  private routinePrincipal(): PrincipalV2 { return { id: this.localId, kind: 'local', capabilities: [...this.routineCapabilities] }; }
+  private scheduleState(routine: Routine, anchor: number): ScheduleState { return { schedule: routine.schedule, anchor }; }
+  private nextRun(routine: Routine, anchor: number, after: number): string | undefined {
+    if (!routine.enabled) return undefined;
+    const next = nextOccurrence(this.scheduleState(routine, anchor), after);
+    return next === undefined ? undefined : new Date(next).toISOString();
+  }
+  private saveRoutine(owner: string, routine: Routine, anchor: number): void {
+    this.store.saveRoutine(owner, routine, anchor);
+    this.emit(owner, { type: 'routine.updated', routine });
+  }
+  /** Routines act as the local owner principal, so only the local owner's data can hold routines. */
+  private requireRoutineOwner(owner: string): void {
+    if (owner !== this.localId) throw new GatewayError('FORBIDDEN', "Routines run on the local owner's behalf");
+  }
+  private async createRoutine(owner: string, principal: PrincipalV2, raw: RoutineInput): Promise<Routine> {
+    this.requireRoutineOwner(owner);
+    const input = clone(raw);
+    const bot = this.store.getBot(input.botId, owner);
+    // Unattended runs of an uncontained agent are an owner decision, like trusting the bot.
+    if (bot.profile === 'trusted') this.requireLocalOwner(principal, 'Routines for trusted bots');
+    const now = this.clock.now();
+    checkSchedule(input.schedule, now);
+    const iso = new Date(now).toISOString();
+    const routine: Routine = { ...input, id: randomUUID(), createdAt: iso, updatedAt: iso };
+    const next = this.nextRun(routine, now, now);
+    if (next) routine.nextRunAt = next;
+    this.saveRoutine(owner, routine, now);
+    this.reschedule();
+    return routine;
+  }
+  private async updateRoutine(owner: string, principal: PrincipalV2, routineId: string, patch: Partial<RoutineInput>): Promise<Routine> {
+    this.requireRoutineOwner(owner);
+    const { routine: existing, anchor: previousAnchor } = this.store.getRoutine(routineId, owner);
+    const { id: _id, sessionId: _s, lastRunAt: _l, nextRunAt: _n, createdAt: _c, updatedAt: _u, ...current } = existing;
+    const merged = { ...current, ...clone(patch) };
+    validateRoutineInput(merged, false);
+    const bot = this.store.getBot(merged.botId, owner);
+    const oldBot = this.store.findBot(existing.botId, owner);
+    const trivial = Object.keys(patch).every(key => key === 'enabled' || key === 'name');
+    if ((bot.profile === 'trusted' || oldBot?.profile === 'trusted') && !trivial) this.requireLocalOwner(principal, 'Changing routines of trusted bots');
+    const now = this.clock.now();
+    const rescheduled = stableJson(merged.schedule) !== stableJson(existing.schedule) || (merged.enabled && !existing.enabled);
+    if (rescheduled && merged.enabled) checkSchedule(merged.schedule, now);
+    const routine: Routine = { ...merged, id: existing.id, createdAt: existing.createdAt, updatedAt: new Date(now).toISOString() };
+    if (existing.lastRunAt) routine.lastRunAt = existing.lastRunAt;
+    if (existing.sessionId && merged.botId === existing.botId && merged.sessionMode === 'reuse') routine.sessionId = existing.sessionId;
+    const anchor = rescheduled ? now : previousAnchor;
+    const next = rescheduled ? this.nextRun(routine, anchor, now) : (routine.enabled ? existing.nextRunAt : undefined);
+    if (next) routine.nextRunAt = next;
+    this.saveRoutine(owner, routine, anchor);
+    this.reschedule();
+    return routine;
+  }
+  /** Deletes the routine and its run records first, then cancels its active task (so nothing queued starts). */
+  private async deleteRoutine(owner: string, routineId: string): Promise<void> {
+    this.store.deleteRoutine(routineId, owner);
+    this.emit(owner, { type: 'routine.deleted', routineId });
+    this.reschedule();
+    for (const task of [...this.tasks.values()]) if (task.routineId === routineId && task.owner === owner) await this.cancel(task);
+  }
+  private saveRun(owner: string, run: RoutineRun): void {
+    this.store.saveRun(owner, run);
+    this.emit(owner, { type: 'routine.run', run });
+  }
+  private routineActive(routineId: string): boolean { return [...this.tasks.values()].some(task => task.routineId === routineId && !task.terminal); }
+  /**
+   * Records a run. A routine never overlaps itself: one active run plus at most one queued run; any
+   * further occurrence is recorded `skipped` with a notification. Catch-up batches (`force`) queue
+   * every selected occurrence, bounded by maxCatchUp.
+   */
+  private enqueueRun(owner: string, routine: Routine, trigger: RoutineRun['trigger'], scheduledFor: number, force = false): RoutineRun {
+    const run: RoutineRun = { id: randomUUID(), routineId: routine.id, botId: routine.botId, trigger, scheduledFor: new Date(scheduledFor).toISOString(), status: 'queued' };
+    const queued = this.store.runsWithStatus(['queued'], owner).filter(entry => entry.run.routineId === routine.id);
+    if (!force && queued.length) {
+      run.status = 'skipped'; run.finishedAt = this.isoNow();
+      this.saveRun(owner, run);
+      this.notify(owner, {
+        kind: 'routine.skipped', title: `Routine skipped: ${routine.name}`, botId: routine.botId, routineRunId: run.id,
+        body: `The run scheduled for ${run.scheduledFor} was skipped because the previous run of "${routine.name}" has not finished.`,
+      });
+      return run;
+    }
+    this.saveRun(owner, run);
+    this.pumpRoutine(owner, routine.id);
+    return run;
+  }
+  private pumpAll(): void {
+    if (this.closed) return;
+    const routines = new Map<string, string>();
+    for (const { owner, run } of this.store.runsWithStatus(['queued'])) routines.set(run.routineId, owner);
+    for (const [routineId, owner] of routines) this.pumpRoutine(owner, routineId);
+  }
+  /** Starts the oldest queued run when the routine is idle and its reused session is free. */
+  private pumpRoutine(owner: string, routineId: string): void {
+    if (this.closed || this.routineActive(routineId)) return;
+    const queued = this.store.runsWithStatus(['queued'], owner).find(entry => entry.run.routineId === routineId)?.run;
+    if (!queued) return;
+    const stored = this.store.findRoutine(routineId, owner);
+    if (!stored) return;
+    const { routine, anchor } = stored;
+    if (routine.sessionMode === 'reuse' && routine.sessionId && this.busy(routine.sessionId)) return;
+    this.startRun(owner, routine, anchor, queued);
+  }
+  private startRun(owner: string, routine: Routine, anchor: number, queued: RoutineRun): void {
+    let run = queued;
+    try {
+      if (this.settingsBusy) throw new GatewayError('SETTINGS_BUSY', 'Provider reload is in progress');
+      const bot = this.store.getBot(routine.botId, owner);
+      let session: SessionV2 | undefined;
+      if (routine.sessionMode === 'reuse' && routine.sessionId) { try { session = this.store.getSession(routine.sessionId, owner); } catch { session = undefined; } }
+      if (!session) {
+        this.availableAgent(bot.agentId, bot.modelId);
+        session = this.newSession(owner, bot, routine.name.slice(0, 80), bot.agentId, bot.modelId);
+        if (routine.sessionMode === 'reuse') { routine.sessionId = session.id; this.saveRoutine(owner, routine, anchor); }
+      }
+      const adapter = this.availableAgent(session.agentId, session.modelId);
+      const task = this.newTask(session, this.routinePrincipal(), this.sessionBot(owner, session), adapter);
+      task.routineRunId = run.id; task.routineId = routine.id;
+      const startedAt = this.isoNow();
+      session.messages.push({ id: randomUUID(), role: 'user', content: routine.prompt, createdAt: new Date().toISOString(), taskId: task.id });
+      session.updatedAt = new Date().toISOString(); this.store.saveSession(owner, session); this.emit(owner, { type: 'session.updated', session });
+      this.emit(owner, { type: 'task.started', taskId: task.id, sessionId: session.id });
+      run = { ...run, status: 'running', sessionId: session.id, taskId: task.id, startedAt };
+      this.saveRun(owner, run);
+      routine.lastRunAt = startedAt; this.saveRoutine(owner, routine, anchor);
+      const started = session;
+      queueMicrotask(() => { void this.runAgent(task, started); });
+    } catch (error) {
+      this.failRun(owner, routine, run, this.error(error));
+    }
+  }
+  private failRun(owner: string, routine: Routine, run: RoutineRun, error: {code: string; message: string}): void {
+    const failed: RoutineRun = { ...run, status: 'failed', finishedAt: this.isoNow(), error };
+    delete failed.blockedOn;
+    this.saveRun(owner, failed);
+    this.notify(owner, { kind: 'routine.failed', title: `Routine failed: ${routine.name}`, body: `${error.code}: ${error.message}`, botId: routine.botId, routineRunId: run.id });
+    this.pumpRoutine(owner, routine.id);
+  }
+  /** A pending permission blocks the run until someone decides. There is no timeout: it waits indefinitely. */
+  private routineBlocked(task: Task, request: PermissionRequestV2): void {
+    const stored = this.store.getRun(task.routineRunId!);
+    if (!stored || task.terminal) return;
+    const run: RoutineRun = { ...stored.run, status: 'blocked', blockedOn: [...new Set([...(stored.run.blockedOn ?? []), request.id])] };
+    this.saveRun(stored.owner, run);
+    const routine = this.store.findRoutine(run.routineId, stored.owner)?.routine;
+    const routineName = routine?.name ?? 'routine'; const botName = task.bot?.name ?? 'bot';
+    this.notify(stored.owner, {
+      kind: 'approval.required', title: `Approval needed: ${botName} / ${routineName}`,
+      body: `Bot "${botName}" (routine "${routineName}") is waiting for approval to ${request.capability}: ${subject(request)}. The run waits until someone decides (request ${request.id}).`,
+      botId: run.botId, routineRunId: run.id, requestId: request.id,
+    });
+  }
+  private routineUnblocked(task: Task, requestId: string): void {
+    if (this.closed || task.terminal) return;
+    const stored = this.store.getRun(task.routineRunId!);
+    if (!stored || !stored.run.blockedOn?.includes(requestId)) return;
+    const run: RoutineRun = { ...stored.run, blockedOn: stored.run.blockedOn.filter(id => id !== requestId) };
+    if (!run.blockedOn!.length) { delete run.blockedOn; run.status = 'running'; }
+    this.saveRun(stored.owner, run);
+  }
+  private routineRunFinished(task: Task, status: 'completed' | 'cancelled' | 'failed', error?: {code: string; message: string}): void {
+    const stored = this.store.getRun(task.routineRunId!);
+    if (!stored) return;
+    const run: RoutineRun = { ...stored.run, status, finishedAt: this.isoNow() };
+    delete run.blockedOn;
+    if (status === 'failed' && error) run.error = error;
+    this.saveRun(stored.owner, run);
+    if (status === 'failed') {
+      const routine = this.store.findRoutine(run.routineId, stored.owner)?.routine;
+      this.notify(stored.owner, { kind: 'routine.failed', title: `Routine failed: ${routine?.name ?? 'routine'}`, body: `${run.error?.code ?? 'TASK_FAILED'}: ${run.error?.message ?? 'Task failed'}`, botId: run.botId, routineRunId: run.id });
+    }
+  }
+  /** Startup: runs a previous process left unfinished never resume silently. */
+  private recoverRoutines(): void {
+    for (const { owner, run } of this.store.runsWithStatus(UNFINISHED_RUNS)) {
+      const previous = run.status;
+      const interrupted: RoutineRun = { ...run, status: 'interrupted', finishedAt: this.isoNow() };
+      delete interrupted.blockedOn;
+      this.saveRun(owner, interrupted);
+      const routine = this.store.findRoutine(run.routineId, owner)?.routine;
+      this.notify(owner, {
+        kind: 'routine.interrupted', title: `Routine interrupted: ${routine?.name ?? 'routine'}`, botId: run.botId, routineRunId: run.id,
+        body: `The host stopped while this run was ${previous}. It was not resumed; run the routine again if needed.`,
+      });
+    }
+  }
+  /**
+   * Fires due routines. Occurrences older than LATE_GRACE_MS (host down, or a timer firing late after
+   * sleep) are missed and handled by the routine's policy: skip, runOnce (latest missed) or runAll
+   * (latest `maxCatchUp`, default 5, oldest first). The most recent on-time occurrence runs normally.
+   */
+  private tick(): void {
+    this.timer = undefined;
+    if (this.closed) return;
+    const now = this.clock.now();
+    for (const { owner, routine, anchor } of this.store.routines()) {
+      if (!routine.enabled || !routine.nextRunAt) continue;
+      const due = Date.parse(routine.nextRunAt);
+      if (due > now) continue;
+      try { this.fire(owner, routine, anchor, due, now); } catch { /* One broken routine never stops the scheduler. */ }
+    }
+    this.reschedule();
+  }
+  private fire(owner: string, routine: Routine, anchor: number, due: number, now: number): void {
+    const state = this.scheduleState(routine, anchor);
+    const cutoff = now - LATE_GRACE_MS;
+    const limit = routine.missedRunPolicy === 'skip' ? 0 : routine.missedRunPolicy === 'runOnce' ? 1 : routine.maxCatchUp ?? DEFAULT_MAX_CATCH_UP;
+    const missed = latestOccurrences(state, due, cutoff, limit);
+    const onTime = latestOccurrences(state, Math.max(due, cutoff), now + 1, 1);
+    const next = nextOccurrence(state, now);
+    const updated: Routine = { ...routine };
+    if (next === undefined) delete updated.nextRunAt; else updated.nextRunAt = new Date(next).toISOString();
+    this.saveRoutine(owner, updated, anchor);
+    for (const at of missed) this.enqueueRun(owner, updated, 'catchup', at, true);
+    // The on-time occurrence belongs to this same catch-up decision. Queued catch-up runs must not
+    // mark it skipped; the one-queued limit still applies to later firings while a run is busy.
+    for (const at of onTime) this.enqueueRun(owner, updated, 'schedule', at, missed.length > 0);
+  }
+  private reschedule(): void {
+    if (this.timer !== undefined) { this.clock.clearTimeout(this.timer); this.timer = undefined; }
+    if (this.closed) return;
+    let earliest: number | undefined;
+    for (const { routine } of this.store.routines()) {
+      if (!routine.enabled || !routine.nextRunAt) continue;
+      const due = Date.parse(routine.nextRunAt);
+      if (earliest === undefined || due < earliest) earliest = due;
+    }
+    if (earliest === undefined) return;
+    const delay = Math.min(Math.max(0, earliest - this.clock.now()), MAX_TIMER_MS);
+    this.timer = this.clock.setTimeout(() => this.tick(), delay);
+  }
+
   private deviceManager(): DeviceManager {
     if (!this.options.devices) throw new GatewayError('NOT_SUPPORTED', 'Device pairing is not available on this host');
     return this.options.devices;
   }
   private createSession(owner: string, success: {ok: true; commandId: string}, bot: Bot, title: string | undefined, agentId: string, modelId?: string): Success {
+    const session = this.newSession(owner, bot, title, agentId, modelId);
+    return { ...success, sessionId: session.id, session: this.scrub(session) };
+  }
+  private newSession(owner: string, bot: Bot, title: string | undefined, agentId: string, modelId?: string): SessionV2 {
     const now = new Date().toISOString();
     const session: SessionV2 = { id: randomUUID(), title: title ?? 'New conversation', agentId, ...(modelId ? {modelId} : {}), createdAt: now, updatedAt: now, messages: [], botId: bot.id };
     this.store.saveSession(owner, session); this.emit(owner, { type: 'session.updated', session });
-    return { ...success, sessionId: session.id, session: this.scrub(session) };
+    return session;
   }
   private async deleteSessions(owner: string, ids: string[]): Promise<void> {
     for (const id of ids) if (this.deletingSessions.has(id)) throw new GatewayError('SESSION_BUSY', 'Session deletion is in progress');
@@ -634,10 +1155,11 @@ export class Gateway {
       });
     }
     const servers = bot.mcpServers.filter(server => server.enabled);
-    if (this.options.mcpBroker && servers.length) {
+    const builtins = bot.memoryEnabled ? this.memoryBuiltins(task) : [];
+    if (this.options.mcpBroker && (servers.length || builtins.length)) {
       try {
         const session = await this.dependency(this.options.mcpBroker.open({
-          taskId: task.id, botId: bot.id, servers: clone(servers), builtins: [], signal: task.controller.signal,
+          taskId: task.id, botId: bot.id, servers: clone(servers), builtins, signal: task.controller.signal,
           authorize: (call, signal) => this.authorizeMcp(task, call, signal),
         }));
         if (!this.live(task)) { await this.cleanup([() => session.close()]); return; }
@@ -666,13 +1188,15 @@ export class Gateway {
       if (!this.live(task)) return;
       const trusted = task.profile === 'trusted';
       const bot = task.bot;
+      const instructions = bot ? this.scrub(await this.instructionsFor(task, bot)) : '';
+      if (!this.live(task)) return;
       const context: AgentRunContextV2 = {
         session: this.scrub(clone(session)), taskId: task.id, principal: clone(task.principal), signal: task.controller.signal,
         emit: update => this.agentUpdate(task, update), executeTool: invocation => this.executeTool(task, invocation),
         requestPermission: input => this.authorize(task, input, { retainOnce: !(input && typeof input === 'object' && 'agentTool' in input), origin: 'adapter' }),
         profile: task.profile, state: this.adapterState(task, task.adapter!.id),
         ...(bot ? { bot: publicBot(bot) } : {}),
-        ...(bot?.instructions ? { instructions: bot.instructions } : {}),
+        ...(instructions ? { instructions } : {}),
         ...(trusted && task.workspace ? { workspace: task.workspace } : {}),
         ...(trusted && task.host ? { host: task.host } : {}),
         ...(trusted && task.mcp ? { mcp: clone(task.mcp.endpoint) } : {}),
@@ -873,6 +1397,7 @@ export class Gateway {
     // Public full-request API accepts only already registered, byte-equivalent requests.
     const waiting = this.requestPermission(clone(request));
     this.taskEvent(task, { type: 'permission.requested', request });
+    if (task.routineRunId) this.routineBlocked(task, request);
     return waiting;
   }
   private addGrant(task: Task, request: PermissionRequestV2, scope: PermissionDecision['scope'], decidedBy: string | undefined, executor: boolean): void {
@@ -930,6 +1455,7 @@ export class Gateway {
     this.audit(pending.task, pending.request, decision.outcome, settlement.via, { decidedBy: settlement.decidedBy, grantId: settlement.grantId });
     this.emit(pending.task.owner, { type: 'permission.resolved', requestId: pending.request.id, outcome: decision.outcome }, undefined, !isV1Capability(pending.request.capability));
     pending.resolve(clone(decision));
+    if (pending.task.routineRunId) this.routineUnblocked(pending.task, pending.request.id);
   }
   private finish(task: Task, status: 'completed' | 'cancelled' | 'failed', error?: {code: string; message: string}): void {
     if (task.terminal) return;
@@ -952,6 +1478,11 @@ export class Gateway {
     task.released = resources.length ? this.cleanup(resources) : Promise.resolve();
     if (status === 'failed') this.emit(task.owner, { type: 'task.failed', taskId: task.id, sessionId: task.sessionId, error: error ?? { code: 'TASK_FAILED', message: 'Task failed' } });
     else this.emit(task.owner, { type: status === 'completed' ? 'task.completed' : 'task.cancelled', taskId: task.id, sessionId: task.sessionId });
+    // On close, routine runs stay running/blocked in the store and become `interrupted` on the next start.
+    if (this.closed) return;
+    if (task.routineRunId) this.routineRunFinished(task, status, error ?? (status === 'failed' ? { code: 'TASK_FAILED', message: 'Task failed' } : undefined));
+    if (task.bot?.compaction && !this.deletingSessions.has(task.sessionId)) this.track(this.compact(task.owner, task.sessionId, false));
+    this.pumpAll();
   }
   async cancelTask(taskId: string, input: Principal | PrincipalV2): Promise<void> {
     const principal = this.principal(input); this.require(principal, 'conversation'); string(taskId, 'task id', 256);
@@ -991,8 +1522,11 @@ export class Gateway {
     if (this.closing) return this.closing;
     this.closed = true;
     this.lifetime.abort();
+    if (this.timer !== undefined) { this.clock.clearTimeout(this.timer); this.timer = undefined; }
     this.closing = (async () => {
       await Promise.all([...this.tasks.values()].map(task => this.cancel(task)));
+      // Background compactions observe the lifetime signal; wait (bounded) so they never touch a closed DB.
+      await this.cleanup([...this.background].map(promise => () => promise.then(() => undefined, () => undefined)));
       // In-flight dispatch may be waiting for an asynchronous settings callback. It must finish before DB close.
       await Promise.allSettled([...this.inFlight.values()].map(command => command.promise));
       await this.cleanup([

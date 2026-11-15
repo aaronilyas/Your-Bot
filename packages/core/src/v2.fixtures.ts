@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import type {
   AgentAdapterV2, AgentRunContext, AgentRunContextV2, AnyCommandResult, CommandResultV2, Bot, BotInput, CapabilityV2, CommandPayloadV2, DesktopEventV2,
-  DesktopGatewayV2, DeviceInfo, DeviceManager, McpBroker, McpCall, PermissionRequestV2, PrincipalV2, SecretCipher, TerminalExitStatus,
-  ToolExecutor, WorkspaceHost,
+  DesktopGatewayV2, DeviceInfo, DeviceManager, McpBroker, McpBuiltinTool, McpCall, OwnerNotification, PermissionRequestV2, PrincipalV2, RoutineRun,
+  SecretCipher, SkillCatalog, SkillInfo, TerminalExitStatus, ToolExecutor, WorkspaceHost,
 } from '@your-bot/contracts';
-import { createGatewayV2, isWithin, type GatewayOptions } from './index.js';
+import { createGatewayV2, isWithin, type GatewayClock, type GatewayOptions } from './index.js';
 
 export const ALL: CapabilityV2[] = ['conversation', 'settings', 'tool.execute', 'file.read', 'file.write', 'file.delete', 'library.install', 'network', 'process.spawn', 'mcp.call'];
 export const owner: PrincipalV2 = { id: 'owner', kind: 'local', capabilities: [...ALL] };
@@ -69,9 +69,9 @@ export class FakeHost implements WorkspaceHost {
 }
 
 export class FakeBroker implements McpBroker {
-  sessions: {taskId: string; servers: unknown[]; authorize: (call: McpCall, signal: AbortSignal) => Promise<boolean>; closed: boolean}[] = [];
+  sessions: {taskId: string; servers: unknown[]; builtins: McpBuiltinTool[]; authorize: (call: McpCall, signal: AbortSignal) => Promise<boolean>; closed: boolean}[] = [];
   async open(input: Parameters<McpBroker['open']>[0]) {
-    const entry = { taskId: input.taskId, servers: input.servers, authorize: input.authorize, closed: false };
+    const entry = { taskId: input.taskId, servers: input.servers, builtins: input.builtins, authorize: input.authorize, closed: false };
     this.sessions.push(entry);
     return {
       endpoint: { name: 'your-bot', url: 'http://127.0.0.1:9/mcp', headers: [{ name: 'Authorization', value: 'Bearer token' }] },
@@ -142,3 +142,63 @@ export function audits(events: DesktopEventV2[]) {
 }
 /** A promise with an external resolver, for pausing fake agents. */
 export function gate() { let open!: () => void; const promise = new Promise<void>(resolve => { open = resolve; }); return { promise, open }; }
+
+/** Deterministic clock: timers fire only from `advance` / `fireDue`, in due order. */
+export class FakeClock implements GatewayClock {
+  private timers = new Map<number, {at: number; callback: () => void}>(); private seq = 0;
+  constructor(public time: number) {}
+  now = () => this.time;
+  setTimeout = (callback: () => void, ms: number) => { const id = ++this.seq; this.timers.set(id, { at: this.time + ms, callback }); return id; };
+  clearTimeout = (handle: unknown) => { this.timers.delete(handle as number); };
+  get pending(): number { return this.timers.size; }
+  /** Normal running host: time passes and timers fire on time, letting the gateway settle between fires. */
+  async advance(ms: number): Promise<void> {
+    const target = this.time + ms;
+    for (;;) {
+      const next = [...this.timers.entries()].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      this.timers.delete(next[0]); this.time = Math.max(this.time, next[1].at); next[1].callback();
+      await settle();
+    }
+    this.time = target; await settle();
+  }
+  /** Suspended host (sleep): time passes without any timer firing. */
+  sleep(ms: number): void { this.time += ms; }
+  /** Fires every timer that is due now (late after a sleep). */
+  async fireDue(): Promise<void> {
+    for (const [id, timer] of [...this.timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+      if (timer.at > this.time || !this.timers.has(id)) continue;
+      this.timers.delete(id); timer.callback(); await settle();
+    }
+  }
+}
+export async function settle(): Promise<void> { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); }
+
+export class FakeSkills implements SkillCatalog {
+  listed: string[][] = [];
+  constructor(public skills: SkillInfo[], public bodies: Record<string, string>) {}
+  async list(workspaces: string[]) { this.listed.push([...workspaces]); return structuredClone(this.skills.filter(skill => skill.source === 'global' || workspaces.some(ws => skill.folder.startsWith(ws)))); }
+  async read(skill: SkillInfo) {
+    const body = this.bodies[`${skill.source}:${skill.id}`];
+    if (body === undefined) throw new Error('unreadable');
+    return body;
+  }
+}
+
+export function notifications(events: DesktopEventV2[]): OwnerNotification[] {
+  return events.filter((event): event is Extract<DesktopEventV2, {type: 'notification'}> => event.type === 'notification').map(event => event.notification);
+}
+export function runEvents(events: DesktopEventV2[]): RoutineRun[] {
+  return events.filter((event): event is Extract<DesktopEventV2, {type: 'routine.run'}> => event.type === 'routine.run').map(event => event.run);
+}
+/** Latest state of each run, in creation order. */
+export function latestRuns(events: DesktopEventV2[]): RoutineRun[] {
+  const runs = new Map<string, RoutineRun>();
+  for (const run of runEvents(events)) runs.set(run.id, run);
+  return [...runs.values()];
+}
+export async function runStatus(events: DesktopEventV2[], predicate: (run: RoutineRun) => boolean): Promise<RoutineRun> {
+  let found: RoutineRun | undefined;
+  await vi.waitFor(() => { found = latestRuns(events).find(predicate); expect(found).toBeDefined(); });
+  return found!;
+}

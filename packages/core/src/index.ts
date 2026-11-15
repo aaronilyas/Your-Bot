@@ -1,7 +1,8 @@
 import type { DesktopGateway, DesktopGatewayV2 } from '@your-bot/contracts';
 import { Gateway, type GatewayOptions } from './gateway.js';
 
-export type { GatewayOptions, AnyAgentAdapter } from './gateway.js';
+export type { GatewayOptions, GatewayClock, AnyAgentAdapter } from './gateway.js';
+export { nextOccurrence, parseCron } from './schedule.js';
 export { ownerOf, publicBot } from './gateway.js';
 export { isWithin } from './paths.js';
 
