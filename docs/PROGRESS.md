@@ -14,9 +14,13 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
 - P7 skills catalog + secret ciphers merged (a383c5e; 31 tests). Follow-up: AesGcmFileCipher does
   not verify permissions of a pre-existing key directory (low; same-user threat out of scope).
 
+- P5 MCP broker merged (32 tests + opt-in real Playwright browser test passing locally).
+  Core must call `expandPreset` and set `cwd` for the browser server (Playwright writes
+  `<cwd>/.playwright-mcp`). Windows `.cmd` path only unit-tested.
+
 ## In flight
-Wave 1: P0 linux container runner, P1 core v2, P2 trusted ACP, P3 workspace host, P5 MCP
-(relaunched after an OOM SIGKILL; keep ≤5 concurrent delegates on this 4-core/15 GB host),
+Wave 1: P0 linux container runner, P1 core v2, P2 trusted ACP, P3 workspace host,
+(keep ≤5 concurrent delegates on this 4-core/15 GB host; an OOM SIGKILL hit P5 once)
 P6 remote.
 
 ## Next
