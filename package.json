@@ -13,16 +13,17 @@
   },
   "scripts": {
     "postinstall": "node node_modules/electron/install.js",
-    "build": "npm run build -w @your-bot/contracts && npm run build -w @your-bot/core && npm run build -w @your-bot/adapters && npm run build -w @your-bot/executor && npm run build -w @your-bot/desktop",
+    "build": "npm run build -w @your-bot/contracts && npm run build -w @your-bot/secrets && npm run build -w @your-bot/skills && npm run build -w @your-bot/workspace && npm run build -w @your-bot/mcp && npm run build -w @your-bot/core && npm run build -w @your-bot/adapters && npm run build -w @your-bot/executor && npm run build -w @your-bot/remote && npm run build -w @your-bot/runtime && npm run build -w @your-bot/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:integration": "vitest run tests/integration.test.ts",
-    "test:security": "vitest run packages/executor packages/adapters/test/bubblewrap.test.ts",
+    "test:security": "vitest run packages/executor packages/adapters/test/bubblewrap.test.ts packages/workspace packages/mcp packages/remote packages/core/src/security",
     "test:desktop": "node tests/run-desktop-smoke.mjs",
     "setup:electron": "node node_modules/electron/install.js",
     "dev": "npm run build && npm run dev -w @your-bot/desktop",
     "start": "npm run start -w @your-bot/desktop",
-    "package": "npm run package -w @your-bot/desktop"
+    "package": "npm run package -w @your-bot/desktop",
+    "test:linux": "node tests/linux/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
