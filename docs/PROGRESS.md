@@ -63,6 +63,10 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   443 pass, only the 10 Arch-environmental strict failures. Lead fixed tests/integration.test.ts
   to drive the v2 renderer store through createGatewayV2.
 
+- `npm run test:linux` fully green at 305a068 (Ubuntu 26.04, --network none): build, typecheck,
+  vitest 453 pass / 2 opt-in skips, security 198, integration 5 (incl. real contained ACP). Runner
+  now uses `--init` (zombie reaping for process-tree tests) and installs iproute2/procps.
+
 ## In flight (stopped early 2026-11-15: Claude 5-hour usage limit; resets 9:10pm ET)
 Work was rerouted to other providers before stopping; check these branches first:
 - P8 runtime+headless host: `feature/p8-runtime-host` (pushed). Only 8824c6a done (local adapter
