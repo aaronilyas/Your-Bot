@@ -1,0 +1,50 @@
+import { useState, type FormEvent } from 'react';
+import type { AppSettingsV2, ProviderConfigV2 } from '@your-bot/contracts';
+import type { DesktopStore } from './store';
+import { Icon, Modal } from './ui';
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+export function SettingsDialog({ settings, store, onClose }: { settings: AppSettingsV2; store: DesktopStore; onClose: () => void }) {
+  const [providers, setProviders] = useState<ProviderConfigV2[]>(() => structuredClone(settings.providers).map(({ apiKey: _secret, ...provider }) => provider));
+  const [newKeys, setNewKeys] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const patch = (id: string, values: Partial<ProviderConfigV2>) => setProviders(current => current.map(provider => provider.id === id ? { ...provider, ...values } : provider));
+  async function save(event: FormEvent) {
+    event.preventDefault(); setError(undefined);
+    for (const provider of providers) {
+      if (!provider.name.trim()) { setError('Give each provider a name.'); return; }
+      if (provider.kind === 'acp' && provider.enabled && provider.launch === 'host') {
+        if (!provider.command?.trim()) { setError(`Enter the command that starts ${provider.name}.`); return; }
+        if (provider.envPassthrough?.some(name => !ENV_NAME.test(name))) { setError('Environment pass-through entries must be variable names.'); return; }
+      } else if (provider.kind === 'acp' && provider.enabled && (!['/usr/bin/node', '/usr/bin/python3'].includes(provider.command ?? '') || provider.args?.length !== 1 || !provider.args[0].startsWith('/') || !/\.(mjs|py)$/.test(provider.args[0]))) {
+        setError('ACP needs a supported system runtime and one absolute .mjs or .py harness script.'); return;
+      }
+      if (provider.kind !== 'acp' && provider.enabled) {
+        try { const url = new URL(provider.endpoint ?? ''); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); }
+        catch { setError(`Enter an HTTP or HTTPS endpoint without embedded credentials for ${provider.name}.`); return; }
+      }
+    }
+    setSaving(true);
+    const result = await store.command({ type: 'settings.update', settings: { providers: providers.map(provider => newKeys[provider.id] ? { ...provider, apiKey: newKeys[provider.id] } : provider) } });
+    if (result?.ok) { await store.command({ type: 'models.refresh' }); onClose(); }
+    else setError(result && !result.ok ? result.error.message : 'Could not save settings. Reconnect and try again.');
+    setSaving(false);
+  }
+  return <Modal title="Provider settings" onClose={onClose}><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
+    <form onSubmit={event => void save(event)}><div className="provider-list">{providers.map((provider, index) => <fieldset className="provider" key={provider.id} disabled={saving}><legend>Provider {index + 1}</legend><div className="provider-top"><label>Name<input value={provider.name} onChange={e => patch(provider.id, { name: e.target.value })} /></label><label className="toggle"><input type="checkbox" checked={provider.enabled} onChange={e => patch(provider.id, { enabled: e.target.checked })} />Enabled</label><button type="button" className="icon-button" aria-label={`Remove ${provider.name}`} onClick={() => setProviders(current => current.filter(p => p.id !== provider.id))}><Icon name="trash" /></button></div>
+      <div className="provider-grid"><label>Provider type<select value={provider.kind} onChange={e => { const kind = e.target.value as ProviderConfigV2['kind']; patch(provider.id, { kind, launch: undefined, envPassthrough: undefined, ...(kind === 'acp' ? { command: '/usr/bin/node', args: [''] } : { endpoint: kind === 'lmstudio' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:8080/v1' }) }); }}><option value="acp">ACP agent</option><option value="lmstudio">LM Studio</option><option value="llamacpp">llama.cpp</option><option value="openai-compatible">OpenAI compatible</option></select></label><label>Model ID (optional)<input value={provider.modelId ?? ''} placeholder="Discovered automatically" onChange={e => patch(provider.id, { modelId: e.target.value || undefined })} /></label></div>
+      {provider.kind === 'acp' ? <>
+        <label>Launch mode<select value={provider.launch ?? 'contained'} onChange={e => e.target.value === 'host' ? patch(provider.id, { launch: 'host', command: '', args: [] }) : patch(provider.id, { launch: undefined, envPassthrough: undefined, command: '/usr/bin/node', args: [''] })}><option value="contained">Contained (strict bots)</option><option value="host">Installed agent on this computer (trusted bots)</option></select></label>
+        {provider.launch === 'host'
+          ? <><label>Agent command<input value={provider.command ?? ''} spellCheck={false} placeholder="grok" onChange={e => patch(provider.id, { command: e.target.value })} /></label><label>Arguments (one per line)<textarea rows={2} spellCheck={false} value={(provider.args ?? []).join('\n')} onChange={e => patch(provider.id, { args: e.target.value.split('\n').map(line => line.trim()).filter(Boolean) })} /></label><label>Environment variables to pass through (names, comma separated)<input value={(provider.envPassthrough ?? []).join(', ')} spellCheck={false} placeholder="ANTHROPIC_API_KEY" onChange={e => patch(provider.id, { envPassthrough: e.target.value.split(',').map(name => name.trim()).filter(Boolean) })} /></label>
+            <p className="warning-inline" role="note">Host-launched agents run uncontained with your user’s rights and network. Only bots set to the trusted profile can use them; their file, terminal and permission requests still go through approvals.</p></>
+          : <><label>Harness runtime<select value={provider.command ?? '/usr/bin/node'} onChange={e => patch(provider.id, { command: e.target.value })}><option value="/usr/bin/node">System Node.js</option><option value="/usr/bin/python3">System Python</option></select></label><label>Harness script<input value={provider.args?.[0] ?? ''} placeholder="/absolute/path/agent.mjs" onChange={e => patch(provider.id, { args: [e.target.value] })} /></label><p className="help">Linux isolation is required. This launch policy supports one script, denies network and native terminal/file tools, and routes Your Bot tools through approvals.</p></>}
+      </> : <><label>Endpoint<input type="url" placeholder="http://127.0.0.1:1234/v1" value={provider.endpoint ?? ''} onChange={e => patch(provider.id, { endpoint: e.target.value })} /></label><label>API key (optional)<input type="password" autoComplete="off" value={newKeys[provider.id] ?? ''} placeholder="Leave blank to preserve the stored key" onChange={e => setNewKeys(current => ({ ...current, [provider.id]: e.target.value }))} /></label><label className="toggle"><input type="checkbox" checked={provider.apiKey === ''} onChange={e => patch(provider.id, { apiKey: e.target.checked ? '' : undefined })} />Remove stored API key</label></>}
+    </fieldset>)}</div>
+    <button type="button" className="button text" disabled={saving || providers.length >= 128} onClick={() => setProviders(current => [...current, { id: crypto.randomUUID(), name: 'Local provider', kind: 'openai-compatible', endpoint: 'http://127.0.0.1:8080/v1', enabled: true }])}><Icon name="plus" />Add provider</button>
+    <p className="help">Credentials stay in the private local store. Stored keys are never sent back to this interface.</p>
+    {error && <p className="inline-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="button secondary" disabled={saving} onClick={onClose}>Cancel</button><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></div>
+    </form></Modal>;
+}
