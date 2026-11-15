@@ -11,7 +11,7 @@ import type {
 import {
   AGENT_MEMORY_LIMIT, bounded, bytes, composeInstructions, fallbackSummary, MEMORY_ENTRIES_LIMIT, memorySection, OWNER_MEMORY_LIMIT, SUMMARY_LIMIT,
 } from './continuity.js';
-import { BUILTIN_MCP_SERVER, normalizeStandingScope, active, matches, standingForbidden, subject } from './grants.js';
+import { normalizeStandingScope, active, matches, standingForbidden, subject } from './grants.js';
 import { checkSchedule, latestOccurrences, nextOccurrence, type ScheduleState } from './schedule.js';
 import { createHostChannel, type HostPermission } from './host-channel.js';
 import { canonicalDirectory, canonicalPaths, isWithin } from './paths.js';
@@ -1066,7 +1066,9 @@ export class Gateway {
     if (next === undefined) delete updated.nextRunAt; else updated.nextRunAt = new Date(next).toISOString();
     this.saveRoutine(owner, updated, anchor);
     for (const at of missed) this.enqueueRun(owner, updated, 'catchup', at, true);
-    for (const at of onTime) this.enqueueRun(owner, this.store.getRoutine(routine.id, owner).routine, 'schedule', at);
+    // The on-time occurrence belongs to this same catch-up decision. Queued catch-up runs must not
+    // mark it skipped; the one-queued limit still applies to later firings while a run is busy.
+    for (const at of onTime) this.enqueueRun(owner, updated, 'schedule', at, missed.length > 0);
   }
   private reschedule(): void {
     if (this.timer !== undefined) { this.clock.clearTimeout(this.timer); this.timer = undefined; }

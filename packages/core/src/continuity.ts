@@ -28,14 +28,22 @@ export function bounded(text: string, max: number): string {
   return bytes(text) <= max ? text : truncateBytes(text, Math.max(0, max - bytes(TRUNCATED))) + TRUNCATED;
 }
 
-/** Memory section from entries given newest first; whole entries only, bounded. */
+/**
+ * Memory section from entries given newest first, at most `limit` bytes. Whole entries are kept
+ * until one does not fit; that entry is truncated into the remaining room so a large newest note
+ * is still delivered instead of blocking every older note.
+ */
 export function memorySection(entries: MemoryEntry[], limit = MEMORY_SECTION_LIMIT): string {
   const header = '## Memory\nNotes saved for this bot (newest first):';
+  if (bytes(header) >= limit) return '';
   let text = header;
   for (const entry of entries) {
-    const line = `\n- ${entry.content.replace(/\s*\n\s*/g, ' ')}`;
-    if (bytes(text + line) > limit) break;
-    text += line;
+    const content = entry.content.replace(/\s*\n\s*/g, ' ');
+    const line = `\n- ${content}`;
+    if (bytes(text + line) <= limit) { text += line; continue; }
+    const room = limit - bytes(text) - bytes('\n- ');
+    if (room > 32) text += `\n- ${bounded(content, room)}`;
+    break;
   }
   return text === header ? '' : text;
 }

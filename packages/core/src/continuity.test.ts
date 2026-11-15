@@ -100,6 +100,20 @@ describe('routines', () => {
     expect(await routineOf(f.gateway, once.id)).toMatchObject({ nextRunAt: at(4 * HOUR) });
   });
 
+  it('runs every catch-up occurrence and the on-time one when a late fire queues more than one', async () => {
+    const f = await routineFixture();
+    const routine = await createRoutine(f.gateway, routineInput(f.bot.id, { missedRunPolicy: 'runAll', maxCatchUp: 5 }));
+    f.clock.sleep(3 * HOUR);
+    await f.clock.fireDue();
+    await vi.waitFor(() => expect(latestRuns(f.events).filter(run => run.status === 'completed')).toHaveLength(3));
+    expect(latestRuns(f.events).filter(run => run.routineId === routine.id).map(run => [run.trigger, run.scheduledFor, run.status])).toEqual([
+      ['catchup', at(HOUR), 'completed'],
+      ['catchup', at(2 * HOUR), 'completed'],
+      ['schedule', at(3 * HOUR), 'completed'],
+    ]);
+    expect(f.notified).toEqual([]);
+  });
+
   it('reuses one session, queues at most one run while busy and records further occurrences as skipped with a notification', async () => {
     const release = gate(); let calls = 0;
     const f = await routineFixture(async context => { if (++calls === 1) await release.promise; context.emit({ type: 'text', text: `Reply ${calls}` }); });
@@ -250,6 +264,22 @@ describe('memory and instructions', () => {
     await finished(f.events, taskId);
     expect(contexts[0].instructions).toBe('Hi');
     expect(f.events.some(event => event.type === 'task.status' && event.status === 'Skill writing was skipped: skills are unavailable on this host')).toBe(true);
+  });
+
+  it('bounds the memory section to 8 KiB and still delivers a newest note that does not fit whole', async () => {
+    const contexts: AgentRunContextV2[] = [];
+    const f = await setup({ adapters: [agent('fake', undefined, async context => { contexts.push(context); })] });
+    const bot = await createBot(f.gateway, botInput({ agentId: 'fake', instructions: 'Be terse.', memoryEnabled: true }));
+    ok(await f.gateway.dispatch(cmd({ type: 'memory.add', botId: bot.id, content: 'older small note' }), owner));
+    ok(await f.gateway.dispatch(cmd({ type: 'memory.add', botId: bot.id, content: 'N'.repeat(8 * 1024) }), owner));
+    await finished(f.events, await send(f.gateway, await botSession(f.gateway, bot.id)));
+    const instructions = contexts[0].instructions!;
+    expect(instructions.startsWith('Be terse.\n\n## Memory\n')).toBe(true);
+    const memory = instructions.slice(instructions.indexOf('## Memory')).split('\n\n')[0];
+    expect(Buffer.byteLength(memory)).toBeLessThanOrEqual(8 * 1024);
+    expect(memory).toContain('NNN');
+    expect(memory).toContain('[truncated]');
+    expect(memory).not.toContain('older small note');
   });
 });
 
