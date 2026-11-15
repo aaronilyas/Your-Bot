@@ -304,6 +304,24 @@ describe('trusted ACP host launch', () => {
     expect((await adapter.getInfo()).models).toEqual([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]);
   });
 
+  it('selects a model reported as session models and switches with session/set_model', async () => {
+    const dir = await workspace();
+    const trace = join(dir, 'trace.ndjson');
+    const adapter = adapterFor('session-models', trace);
+    const run = runContext(dir);
+    run.session.modelId = 'b';
+    await adapter.run(run);
+    expect(traceOf(trace)).toContainEqual(expect.objectContaining({ method: 'session/set_model', params: { sessionId: 'trusted-session', modelId: 'b' } }));
+    expect(traceOf(trace).some(entry => entry.method === 'session/set_config_option')).toBe(false);
+    expect((await adapter.getInfo()).models).toEqual([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]);
+    const unchanged = join(dir, 'unchanged.ndjson');
+    await adapterFor('session-models', unchanged).run(runContext(dir, memoryState(), { taskId: 'task-2' }));
+    expect(traceOf(unchanged).some(entry => entry.method === 'session/set_model')).toBe(false);
+    const missing = runContext(dir, memoryState(), { taskId: 'task-3' });
+    missing.session.modelId = 'zzz';
+    await expect(adapterFor('session-models', join(dir, 'missing.ndjson')).run(missing)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' });
+  });
+
   it('excludes approval and host waits from the run timeout', async () => {
     const dir = await workspace();
     const slowPermission = runContext(dir, memoryState(), {
