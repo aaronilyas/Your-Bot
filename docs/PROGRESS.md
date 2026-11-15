@@ -67,19 +67,19 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   vitest 453 pass / 2 opt-in skips, security 198, integration 5 (incl. real contained ACP). Runner
   now uses `--init` (zombie reaping for process-tree tests) and installs iproute2/procps.
 
-## In flight (stopped early 2026-11-15: Claude 5-hour usage limit; resets 9:10pm ET)
-Work was rerouted to other providers before stopping; check these branches first:
-- P8 runtime+headless host: `feature/p8-runtime-host` (pushed). Only 8824c6a done (local adapter
-  system message; Grok `session/new.models` + `session/set_model`). Continuation running on
-  Grok 4.7: packages/runtime, desktop backend → createGatewayV2, apps/host + control channel,
-  tests/v2-*.test.ts. On merge: drop the P4 option casts, enable any `.todo` routine test, verify
-  the McpBroker wrapper always expands `preset` configs.
-- If a continuation failed, its branch still holds the last commits; resume from it with
-  `git switch <branch>` in a new worktree (a branch can be checked out in only one worktree:
-  `git worktree list`, then `git worktree remove` the stale one after committing).
+- P8 runtime + headless host merged (3574512): packages/runtime (one composition for desktop and
+  headless; McpBroker wrapper always expands presets), desktop backend on createGatewayV2 with
+  safeStorage, apps/host `your-bot-host` (init/run/ctl/pair/devices/revoke/bot/grant/routine/
+  approvals/approve/watch) with a 0600 unix socket (Windows named pipe) + constant-time token
+  first frame. tests/v2-runtime.test.ts: trusted workspace edit+command, unattended routine under
+  standing grants (enabled after P4), remote pair+approve, control-token rejection, opt-in real
+  Grok (passed). `npm run test:linux` at 3574512: all steps green, vitest 463 pass / 3 opt-in skips,
+  security 198, integration 5.
+
+## In flight
+- P10 demo + cross-OS (see Next).
 
 ## Next
-1. Review + merge P8 (tests, targeted diff review of authorization/control channel).
 2. Full validation: `npm run build`, `npm run typecheck`, `npx vitest run` (expect only the 10
    Arch-environmental strict failures), `npm run test:linux` (must be fully green), `npm run
    package` + `npm run test:desktop` (desktop smoke; preload now has chooseDirectory), visual
