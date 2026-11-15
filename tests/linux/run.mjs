@@ -52,7 +52,7 @@ console.log(`== image ready in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 // bubblewrap create nested namespaces and mount proc inside this disposable container only.
 // One container for all steps so build output (dist) carries over; removed on exit.
 const NAME = `your-bot-linux-${process.pid}`;
-const started = await spawnP('docker', ['run', '-d', '--name', NAME, '--network', 'none', '--cap-add', 'SYS_ADMIN',
+const started = await spawnP('docker', ['run', '-d', '--init', '--name', NAME, '--network', 'none', '--cap-add', 'SYS_ADMIN',
   '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined',
   '--security-opt', 'systempaths=unconfined', IMAGE, 'sleep', 'infinity'], { stdio: ['ignore', 'ignore', 'inherit'] });
 if (started !== 0) { console.error('container start FAILED'); process.exit(1); }
