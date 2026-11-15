@@ -13,7 +13,7 @@
   },
   "scripts": {
     "postinstall": "node node_modules/electron/install.js",
-    "build": "npm run build -w @your-bot/contracts && npm run build -w @your-bot/secrets && npm run build -w @your-bot/skills && npm run build -w @your-bot/workspace && npm run build -w @your-bot/mcp && npm run build -w @your-bot/core && npm run build -w @your-bot/adapters && npm run build -w @your-bot/executor && npm run build -w @your-bot/remote && npm run build -w @your-bot/runtime && npm run build -w @your-bot/desktop",
+    "build": "npm run build -w @your-bot/contracts && npm run build -w @your-bot/secrets && npm run build -w @your-bot/skills && npm run build -w @your-bot/workspace && npm run build -w @your-bot/mcp && npm run build -w @your-bot/core && npm run build -w @your-bot/adapters && npm run build -w @your-bot/executor && npm run build -w @your-bot/remote && npm run build -w @your-bot/runtime && npm run build -w @your-bot/host && npm run build -w @your-bot/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:integration": "vitest run tests/integration.test.ts",

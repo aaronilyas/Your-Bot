@@ -11,5 +11,15 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
-  "dependencies": { "@your-bot/contracts": "0.1.0" }
+  "dependencies": {
+    "@your-bot/adapters": "0.1.0",
+    "@your-bot/contracts": "0.1.0",
+    "@your-bot/core": "0.1.0",
+    "@your-bot/executor": "0.1.0",
+    "@your-bot/mcp": "0.1.0",
+    "@your-bot/remote": "0.1.0",
+    "@your-bot/secrets": "0.1.0",
+    "@your-bot/skills": "0.1.0",
+    "@your-bot/workspace": "0.1.0"
+  }
 }

@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { CommandPayload, DesktopEvent, DesktopGateway, ToolInvocation } from '@your-bot/contracts';
+import type { CommandPayload, CommandResultV2, DesktopCommand, DesktopCommandV2, DesktopEvent, DesktopEventV2, DesktopGateway, ToolInvocation } from '@your-bot/contracts';
 import { createGateway } from '@your-bot/core';
 import { createAdapters, BubblewrapContainmentLauncher } from '@your-bot/adapters';
 import { createToolExecutor } from '@your-bot/executor';
-import { DesktopStore } from '../apps/desktop/src/renderer/store.js';
+import { DesktopStore, type DesktopTransport } from '../apps/desktop/src/renderer/store.js';
 import { inProcessTransport, localPrincipal } from './helpers.js';
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -69,10 +69,13 @@ async function fixture(autoApprove = true, includeAcp = false) {
     if (!result.ok || !result.taskId) throw new Error(JSON.stringify(result));
     return terminal(result.taskId);
   };
-  return { root, executor, dispatch, events, sessionId, tool, terminal, transport: {
-    dispatch: (command: Parameters<DesktopGateway['dispatch']>[0]) => gateway.dispatch(command, localPrincipal),
-    subscribe: (listener: (event: DesktopEvent) => void) => gateway.subscribe(listener, localPrincipal),
-  }, restart: async () => {
+  // DesktopStore speaks contract v2. This fixture's gateway is still v1, which is what the
+  // contained-ACP case exercises, so v2 frames that are also v1 commands are forwarded as version 1.
+  const transport: DesktopTransport = {
+    dispatch: (command: DesktopCommandV2) => gateway.dispatch({ ...command, version: 1 } as DesktopCommand, localPrincipal) as Promise<CommandResultV2>,
+    subscribe: (listener: (event: DesktopEventV2) => void) => gateway.subscribe(event => listener(event as DesktopEventV2), localPrincipal),
+  };
+  return { root, executor, dispatch, events, sessionId, tool, terminal, transport, restart: async () => {
     await gateway.close();
     // Gateway close owns executor shutdown; a restarted host gets a new executor.
     const replacement = createToolExecutor({ environmentRoot: join(root, 'python') });
