@@ -6,9 +6,14 @@
  * - Every event carries the version of the contract that defines its type. A subscriber
  *   that did not opt into v2 (`SubscribeOptions.contractVersion !== 2`) receives only v1
  *   event types, with v1-shaped payloads (v2-only fields stripped; permission requests
- *   whose capability is not a v1 capability are withheld).
+ *   whose capability is not a v1 capability are withheld, and so are their permission.resolved).
  * - Wire values remain JSON serializable. Interfaces marked "non-wire" are in-process
  *   dependency-injection seams; they never cross a transport.
+ *
+ * Error codes added by v2 (StructuredError.code): PROFILE_UNSUPPORTED, WORKSPACE_UNAVAILABLE,
+ *   INVALID_WORKSPACE, OUTSIDE_WORKSPACE, STANDING_FORBIDDEN, SECRET_CIPHER_REQUIRED,
+ *   SECRET_CIPHER_MISMATCH, SECRET_CIPHER_FAILED, NOT_SUPPORTED, LIMIT_EXCEEDED, INVALID_CURSOR,
+ *   TERMINAL_NOT_FOUND.
  *
  * Authority rules (normative; the gateway enforces them, transports and adapters cannot)
  * - Core is the only authority. Every file, command, network and MCP action requested by an
@@ -92,6 +97,7 @@ export interface Bot {
   updatedAt: string;
 }
 export type BotInput = Omit<Bot, 'id' | 'createdAt' | 'updatedAt'>;
+export type BotPatch = { [K in keyof BotInput]?: undefined extends BotInput[K] ? BotInput[K] | null : BotInput[K] };
 
 /** v1 Session plus bot ownership and compaction state. `messages` holds only live (uncompacted) messages. */
 export interface SessionV2 extends Session {
@@ -116,7 +122,8 @@ export interface PermissionDetailV2 {
   capability: CapabilityV2;
   botId?: BotId;
   /** process.spawn (ACP terminal/create): exact argv and canonical cwd. */
-  command?: { command: string; args: string[]; cwd: string };
+  /** `env` lists variables the command sets; a request with env never matches a standing grant. */
+  command?: { command: string; args: string[]; cwd: string; env?: { name: string; value: string }[] };
   /** mcp.call */
   mcp?: { serverId: string; tool: string };
   /** tool.execute requested by a trusted agent for one of its own built-in tools (ACP session/request_permission). */
@@ -302,7 +309,8 @@ export type CommandPayloadV2 =
   /** An afterSequence beyond the latest event fails with error code INVALID_CURSOR. */
   | { type: 'state.sync'; afterSequence?: number }
   | { type: 'bot.create'; bot: BotInput }
-  | { type: 'bot.update'; botId: BotId; patch: Partial<BotInput> }
+  /** `null` clears an optional field (modelId, workspace, compaction). */
+  | { type: 'bot.update'; botId: BotId; patch: BotPatch }
   | { type: 'bot.delete'; botId: BotId }
   | { type: 'bot.session.create'; botId: BotId; title?: string }
   | { type: 'permission.decide'; decision: PermissionDecisionV2 }

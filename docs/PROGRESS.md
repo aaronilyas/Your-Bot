@@ -33,6 +33,14 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   /proc/self/fd; macOS/Windows detect-not-prevent; Windows orphans after leader exit survive
   taskkill /T; hardlinks inside the root can be read. All documented in packages/workspace.
 
+- P1 core v2 merged (51 core tests; whole repo 330 pass, only the 10 environmental strict
+  failures). `createGateway` stays v1-only; `createGatewayV2` serves v1+v2 (desktop must switch
+  in P8). Lead applied contract requests: command `env`, `BotPatch` with null clearing (core
+  implemented), withheld resolutions, error-code list. Open items handed to P4: INVALID_CURSOR,
+  missing-file read returns UNSAFE_PATH instead of NOT_FOUND, null-clear test. Owner should know:
+  a standing `tool.execute` grant by `agentToolKind` (e.g. 'execute') lets a trusted agent's own
+  shell tool run any command without folder scoping; command-prefix grants match literally.
+
 ## In flight
 Wave 1: P1 core v2, P2 trusted ACP. Keep ≤5 concurrent delegates on this
 4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).

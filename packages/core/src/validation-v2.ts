@@ -1,4 +1,4 @@
-import type {
+import type { BotPatch,
   AppSettingsV2, BotInput, CapabilityV2, CompactionPolicy, DesktopCommandV2, HostFileReadRequest, HostFileWriteRequest,
   HostTerminalCreateRequest, McpServerConfig, PermissionDecisionV2, PermissionInputV2, PrincipalV2, RoutineInput,
   StandingGrantInput, StandingGrantScope,
@@ -119,10 +119,15 @@ export function validateBotInput(value: unknown): BotInput {
   assert(object.modelId !== '' && object.workspace !== '', 'Empty optional fields must be omitted');
   return structuredClone(value) as BotInput;
 }
-export function validateBotPatch(value: unknown): Partial<BotInput> {
+const CLEARABLE = ['modelId', 'workspace', 'compaction'];
+export function validateBotPatch(value: unknown): BotPatch {
   const object = record(value, BOT_KEYS, []);
-  for (const key of Object.keys(object)) botField(key, object[key]);
-  return structuredClone(value) as Partial<BotInput>;
+  for (const key of Object.keys(object)) {
+    // null clears an optional field; "" remains accepted for modelId/workspace (v2 pre-release form).
+    if (object[key] === null) { assert(CLEARABLE.includes(key), `${key} cannot be cleared`); continue; }
+    botField(key, object[key]);
+  }
+  return structuredClone(value) as BotPatch;
 }
 
 export function validateStandingScope(value: unknown): StandingGrantScope {

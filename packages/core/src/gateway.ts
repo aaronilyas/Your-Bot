@@ -499,12 +499,11 @@ export class Gateway {
       case 'bot.update': {
         const existing = this.store.getBot(command.botId, owner);
         const patch = command.patch;
-        const merged: BotInput = { ...this.botInput(existing), ...clone(patch) };
-        if (patch.modelId === '') delete merged.modelId;
-        if (patch.workspace === '') delete merged.workspace;
+        const merged = { ...this.botInput(existing), ...clone(patch) } as Record<string, unknown>;
+        for (const key of ['modelId', 'workspace', 'compaction']) if (merged[key] === null || merged[key] === '') delete merged[key];
         if (patch.mcpServers) merged.mcpServers = this.mergeMcpSecrets(existing.mcpServers, patch.mcpServers);
-        validateBotInput(merged);
-        const input = await this.normalizeBot(merged);
+        const validated = validateBotInput(merged);
+        const input = await this.normalizeBot(validated);
         const trusted = existing.profile === 'trusted' || input.profile === 'trusted';
         if (patch.profile === 'trusted') this.requireLocalOwner(principal, 'Trusted bots');
         if (trusted && (input.workspace !== existing.workspace || stableJson(input.mcpServers) !== stableJson(existing.mcpServers) || input.agentId !== existing.agentId)) {
