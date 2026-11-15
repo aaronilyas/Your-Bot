@@ -42,7 +42,8 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   shell tool run any command without folder scoping; command-prefix grants match literally.
 
 ## In flight
-Wave 1: P1 core v2, P2 trusted ACP. Keep ≤5 concurrent delegates on this
+Wave 1: P2 trusted ACP (Grok 4.7). Wave 2: P4 continuity+routines (feature/p4-continuity-routines),
+P9 desktop UI v2 (feature/p9-desktop-v2). P8 runtime+headless host starts after P2 merges. Keep ≤5 concurrent delegates on this
 4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
 
 ## Next
