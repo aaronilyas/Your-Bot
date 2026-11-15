@@ -29,8 +29,12 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   `BackendTransportV2` added. P1 integration must return `INVALID_CURSOR` for a future
   `afterSequence`. Limits: host-wide pairing throttle can be griefed; no cert rotation.
 
+- P3 WorkspaceHost merged (65 tests Linux, 64 Windows 11). Linux closes swap races via
+  /proc/self/fd; macOS/Windows detect-not-prevent; Windows orphans after leader exit survive
+  taskkill /T; hardlinks inside the root can be read. All documented in packages/workspace.
+
 ## In flight
-Wave 1: P1 core v2, P2 trusted ACP, P3 workspace host. Keep ≤5 concurrent delegates on this
+Wave 1: P1 core v2, P2 trusted ACP. Keep ≤5 concurrent delegates on this
 4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
 
 ## Next
