@@ -11,9 +11,13 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   failures are strict ACP bubblewrap tests that assume the Debian multiarch library layout
   (environmental, see PLAN "Environment notes").
 
+- P7 skills catalog + secret ciphers merged (a383c5e; 31 tests). Follow-up: AesGcmFileCipher does
+  not verify permissions of a pre-existing key directory (low; same-user threat out of scope).
+
 ## In flight
-Wave 1: P0 linux container runner, P1 core v2, P2 trusted ACP, P3 workspace host, P5 MCP,
-P6 remote, P7 skills+secrets.
+Wave 1: P0 linux container runner, P1 core v2, P2 trusted ACP, P3 workspace host, P5 MCP
+(relaunched after an OOM SIGKILL; keep ≤5 concurrent delegates on this 4-core/15 GB host),
+P6 remote.
 
 ## Next
 Wave 2: P4 continuity+routines, P8 runtime+headless host, P9 desktop UI. Wave 3: P10 demo and
