@@ -18,8 +18,14 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   Core must call `expandPreset` and set `cwd` for the browser server (Playwright writes
   `<cwd>/.playwright-mcp`). Windows `.cmd` path only unit-tested.
 
+- P0 Ubuntu 26.04 container runner merged: `npm run test:linux` (git archive HEAD → image; tests
+  under --network none). Container run: build/typecheck/security 47/47/integration 5/5 green;
+  full vitest 160/160 after fixing a flaky desktop UI waitFor. Image installs Node at /usr/bin/node
+  and upstream pip 25.3 (Ubuntu's patched pip wheel reads /etc/ssl/certs, absent in the offline
+  sandbox — a product limitation to note in docs, not fixed).
+
 ## In flight
-Wave 1: P0 linux container runner, P1 core v2, P2 trusted ACP, P3 workspace host,
+Wave 1: P1 core v2, P2 trusted ACP, P3 workspace host,
 (keep ≤5 concurrent delegates on this 4-core/15 GB host; an OOM SIGKILL hit P5 once)
 P6 remote.
 
