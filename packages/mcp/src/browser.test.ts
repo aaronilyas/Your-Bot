@@ -23,7 +23,7 @@ describe('browser preset (opt-in: YOUR_BOT_BROWSER_TEST=1)', () => {
     if (preset.transport !== 'stdio') throw new Error('expected stdio');
     const executable = process.env.YOUR_BOT_BROWSER_EXECUTABLE;
     // The preset deliberately blocks file:// (Playwright MCP default); the test opts in for its local page only.
-    const config = { ...preset, args: [...(preset.args ?? []), '--allow-unrestricted-file-access', ...(executable ? ['--executable-path', executable] : [])] };
+    const config = { ...preset, cwd: dir, args: [...(preset.args ?? []), '--allow-unrestricted-file-access', ...(executable ? ['--executable-path', executable] : [])] };
     const broker = createMcpBroker({ connectTimeoutMs: 180_000 });
     const decisions: string[] = [];
     const session = await broker.open({

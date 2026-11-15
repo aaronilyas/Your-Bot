@@ -108,6 +108,8 @@ the test is reported as skipped by name.
 
 ## Known limitations
 
+* Playwright MCP writes snapshots/output under `<cwd>/.playwright-mcp`; set `cwd` on the browser server
+  config to a scratch/workspace directory (otherwise it lands in the broker's process cwd).
 * A stdio descendant that deliberately leaves the process group (`setsid`) is not reached on POSIX.
 * Only tools are proxied; upstream resources/prompts/sampling/elicitation are not.
 * Upstream tool list is a snapshot; a crashed stdio upstream is not restarted (calls return
