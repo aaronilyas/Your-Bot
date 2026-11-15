@@ -37,6 +37,9 @@ All public exports are in `src/index.ts`:
 - `BubblewrapContainmentLauncher`, `BubblewrapContainmentOptions`: concrete Linux
   implementation. `acp.containment` and `acpByProvider[id].containment` inject it.
   The original `launcher` option remains an alias; specifying both is rejected.
+- `HostLauncher`, `HostLaunchRequest`, `HostedAgent`: uncontained spawn of an installed
+  agent CLI for `ProviderConfigV2.launch === 'host'`. Specifying both a host launcher
+  and a containment launcher is rejected.
 - `AdapterError` and `normalizeAdapterError(error, signal?)`. Errors implement the
   frozen `StructuredError` fields, with safe generic messages; no upstream HTTP
   error bodies, stderr, API keys, command arguments, or arbitrary exception text.
@@ -253,21 +256,91 @@ for the current active prompt and cannot reuse extension tool IDs. This is a You
 Bot extension, not a standard ACP tool execution RPC. Standard ACP has no portable
 mechanism to execute every native tool through the host executor.
 
+## Trusted profile (host-launched ACP)
+
+`ProviderConfigV2.launch === 'host'` builds an `AcpAdapter` whose `profiles` is
+`['trusted']` and whose process is started by `HostLauncher` (or an injected
+`acp.host`). A containment launcher is not used on that path. `profiles` is
+`['strict']` for every contained adapter. A host launcher refuses a v1 context or
+`profile: 'strict'` with `PROFILE_UNSUPPORTED` before spawn. A contained adapter
+refuses `profile: 'trusted'` the same way. The two launchers cannot be configured
+together.
+
+**What is not mediated.** The agent process itself is uncontained. It runs with
+the user's rights and can use the network. Its cwd is `context.workspace`. The
+spawn uses `shell: false` and a minimal environment: `PATH`, `HOME` /
+`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_*`, `TMP` / `TEMP` / `TMPDIR`,
+`LANG` / `LC_*`, `SystemRoot`, `ComSpec`, `PATHEXT`, plus the names in
+`ProviderConfigV2.envPassthrough` (values are read from the host environment at
+launch and are not stored). On Windows, `PATHEXT` is resolved and `.cmd` / `.bat`
+shims run through `cmd.exe /d /s /c` with Rust-style batch quoting;
+`windowsVerbatimArguments` is set so Node does not re-quote. `terminate()` kills
+the whole tree: a POSIX process group, or `taskkill /T /F` on Windows. Anything
+the agent does with its own process (its own files, its own network, its own
+child processes) is outside this package's mediation. Do not treat a trusted
+adapter as a sandbox.
+
+**What is mediated.** When `context.host` is present, initialize advertises
+`fs.readTextFile`, `fs.writeTextFile`, and `terminal`. The adapter serves
+`fs/read_text_file`, `fs/write_text_file`, and
+`terminal/create|output|wait_for_exit|kill|release` by calling `context.host`.
+It does not open files or spawn processes for the agent itself. A missing host
+advertises those capabilities as false and answers the methods with
+method-not-found. Every such request must carry the active ACP `sessionId`.
+A host rejection becomes JSON-RPC `-32603` with `data.code` set to the
+structured error code (`PERMISSION_DENIED`, `OUTSIDE_WORKSPACE`, `NOT_FOUND`,
+`TERMINAL_NOT_FOUND`, `LIMIT_EXCEEDED`, or `HOST_FAILURE`).
+
+`session/request_permission` calls
+`context.requestPermission({ capability: 'tool.execute', reason, agentTool, botId })`.
+An allow decision selects the `allow_once` option. Any other decision selects
+`reject_once`. The adapter never selects `allow_always`. The
+`_your_bot/execute_tool` extension still goes to `context.executeTool`.
+
+**Continuity.** `context.state` stores `{ acpSessionId, cwd, instructionsHash }`.
+When the agent advertises `loadSession` and the stored cwd matches
+`context.workspace`, the next run sends `session/load`, ignores replayed
+`session/update` notifications, and prompts only the newest user message. A load
+failure falls back to `session/new` plus a text transcript, including
+`session.summary` when the session is a `SessionV2`. `context.instructions` is
+delivered at the start of a new ACP session and again only when its hash
+changes: as `sessionCapabilities.systemPrompt` append content when the agent
+advertises that capability, otherwise as a prompt prefix. A failed prompt that
+was supposed to carry the prefix retries the delivery.
+
+**MCP.** When `context.mcp` is set and the agent advertises
+`mcpCapabilities.http`, `session/new` and `session/load` include one
+`{ type: 'http', name, url, headers }` server. Otherwise the servers array is
+empty. If an endpoint was configured but HTTP MCP is not advertised, the run
+emits a status and omits the servers.
+
+**Deadlines.** Time spent awaiting `context.requestPermission` and
+`context.host.*` is excluded from the run timeout, on both the trusted path and
+the contained permission callback. A routine may wait for an owner approval
+without burning the transport deadline. `executeTool` stays inside the timeout.
+Cancellation still aborts those waits.
+
 ## Frozen-contract limits and host obligations
 
 Contract v1 has no tool-call correlation fields on stored `ChatMessage`, no opaque
 ACP session persistence, no system role and no callback cancellation argument.
-Consequently historical local tool messages are replayed as labelled user context;
-ACP replays a text transcript into a fresh session. This preserves visible history
-but not exact structured tool history or hidden harness state. ACP interactive
-authentication, terminal login, persistence, arbitrary MCP servers and v2 are not
-implemented.
+The contained (`strict`) path still replays a text transcript into a fresh
+session and refuses client filesystem and terminal RPCs. Historical local tool
+messages are replayed as labelled user context. That preserves visible history
+but not exact structured tool history. The trusted profile uses
+`AgentRunContextV2`: `context.state` persists the ACP session, `context.host`
+serves delegated filesystem and terminal RPCs, and `context.mcp` is forwarded
+only as one HTTP MCP server when the agent advertises that capability. Interactive
+authentication and terminal login of the agent process itself are still outside
+this package.
 
-The adapter's deadline stops transport and its wait for a callback. It cannot
-forcibly abort a core-owned `executeTool` or `requestPermission` closure because
-those frozen signatures do not accept its internal signal. **Core must cancel its
-executor and revoke pending approvals on every rejected run, including TIMEOUT,
-transport failure and containment failure**, and on task cancellation/shutdown.
+The adapter's deadline stops transport. It pauses that deadline while a
+`requestPermission` or trusted `context.host.*` call is in flight, and it aborts
+those waits when the task is cancelled. It still cannot forcibly abort a
+core-owned `executeTool` closure, because that frozen signature does not accept
+the adapter's internal signal. **Core must cancel its executor and revoke pending
+approvals on every rejected run, including TIMEOUT, transport failure and
+containment failure**, and on task cancellation/shutdown.
 No late callback result is emitted by this package. The supplied launcher receives
 the internal signal, so its native OS permissions must expire automatically.
 See `CONTRACT_REQUEST.md` for optional future contract improvements; no contract
@@ -300,9 +373,14 @@ sentinels in tmp/home, unreadable home secrets (including proc-root bypass probe
 no inherited secret environment, readonly root/runtime, safe threads, sized
 scratch exhaustion, hard limits, abort/partial-startup cleanup, and wall teardown.
 Missing OS dependencies or denied isolation **fail** these tests on Linux x86_64;
-only other platforms are explicitly skipped. No real third-party production ACP
-harness or cloud/local inference engine was available; the end-to-end contained
-harnesses are deterministic fixtures. The full adapter suite has 74 passing tests.
+only other platforms are explicitly skipped. The contained end-to-end harnesses are deterministic fixtures. Trusted-profile
+tests in `test/trusted.test.ts` and `test/host-launcher.test.ts` drive a fake
+ACP agent and cover filesystem, terminal, and permission mediation, session
+load, HTTP MCP, the minimal environment, and timeout exclusion.
+`test/real-agent.test.ts` is skipped unless `YOUR_BOT_REAL_AGENT` is `grok` or
+`claude`. With that test skipped, 89 tests pass where Bubblewrap cannot be
+established, including the cases that fail closed before launch. The rest of
+`test/bubblewrap.test.ts` passes only where that launcher can be established.
 
 Containment references: [Bubblewrap source/lifecycle](https://github.com/containers/bubblewrap/blob/main/bubblewrap.c),
 [Linux seccomp filter behavior](https://man7.org/linux/man-pages/man2/seccomp.2.html),

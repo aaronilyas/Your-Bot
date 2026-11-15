@@ -29,6 +29,8 @@ export interface RunScope {
   abort(reason: AdapterError): void;
   done: Promise<void>;
   finish(): void;
+  /** Pause the run deadline while `operation` is pending. */
+  excludeTimeout<T>(operation: Promise<T>): Promise<T>;
 }
 
 export class RunManager {
@@ -50,13 +52,45 @@ export class RunManager {
     const onAbort = () => controller.abort(new AdapterError('CANCELLED', 'Agent task was cancelled.'));
     parent?.addEventListener('abort', onAbort, { once: true });
     if (parent?.aborted) onAbort();
-    const timer = setTimeout(() => controller.abort(new AdapterError('TIMEOUT', 'Agent operation timed out.', true)), this.timeoutMs);
+    const timeout = () => controller.abort(new AdapterError('TIMEOUT', 'Agent operation timed out.', true));
+    let remaining = this.timeoutMs;
+    let deadline = Date.now() + remaining;
+    let pauseDepth = 0;
+    let timer = setTimeout(timeout, remaining);
     timer.unref();
+    const arm = (ms: number) => {
+      remaining = ms;
+      deadline = Date.now() + ms;
+      clearTimeout(timer);
+      if (ms <= 0) { timeout(); return; }
+      timer = setTimeout(timeout, ms);
+      timer.unref();
+    };
     let finished = false;
     const scope: RunScope = {
       signal: controller.signal,
       abort: reason => controller.abort(reason),
       done,
+      /**
+       * Approvals and host filesystem/terminal calls may wait for a person.
+       * That wait does not consume the run deadline; cancellation still does.
+       */
+      excludeTimeout: <T>(operation: Promise<T>): Promise<T> => {
+        if (finished || controller.signal.aborted) return operation;
+        pauseDepth += 1;
+        if (pauseDepth === 1) {
+          clearTimeout(timer);
+          remaining = Math.max(0, deadline - Date.now());
+        }
+        let resumed = false;
+        const resume = () => {
+          if (resumed) return;
+          resumed = true;
+          pauseDepth = Math.max(0, pauseDepth - 1);
+          if (pauseDepth === 0 && !finished && !controller.signal.aborted) arm(remaining);
+        };
+        return operation.finally(resume);
+      },
       finish: () => {
         if (finished) return;
         finished = true;
