@@ -59,9 +59,9 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
 
 ## In flight (stopped early 2026-11-15: Claude 5-hour usage limit; resets 9:10pm ET)
 Work was rerouted to other providers before stopping; check these branches first:
-- P4 continuity+routines: `feature/p4-continuity-routines` (pushed). Claude agent reached 1b326bb
-  (core 83/83 green; final spec audit not done). Continuation running on Antigravity
-  (claude-opus-4-6-thinking): audit vs PLAN P4, fill gaps, README. Review then merge.
+- P4 continuity+routines: `feature/p4-continuity-routines` (pushed, 4c17ec8; core 83/83 green;
+  final spec audit not done). Antigravity hit its quota (resets ~2026-11-21); continuation now
+  running on Grok 4.7: audit vs the P4 spec, fill gaps, README. Review then merge.
 - P8 runtime+headless host: `feature/p8-runtime-host` (pushed). Only 8824c6a done (local adapter
   system message; Grok `session/new.models` + `session/set_model`). Continuation running on
   Grok 4.7: packages/runtime, desktop backend → createGatewayV2, apps/host + control channel,
@@ -86,7 +86,8 @@ Work was rerouted to other providers before stopping; check these branches first
    control channel, remote protocol), validation; then one PR integration → main.
 
 ## Open decisions / owner actions
-- Claude account hit its 5-hour limit during wave 2; Grok and Antigravity remain available.
+- Claude account hit its 5-hour limit during wave 2 (resets 9:10pm ET); Antigravity quota exhausted
+  (~6 days). Only Grok remains; both continuations (P4, P8) run there.
 - `macmini` is locked (SSH refused until unlocked locally). macOS trusted-profile validation
   needs the owner to unlock it.
 - `ubuntu` SSH alias is Arch (Omarchy), not Ubuntu; strict/security suites run in an Ubuntu
