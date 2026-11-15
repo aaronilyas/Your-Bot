@@ -24,6 +24,11 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   and upstream pip 25.3 (Ubuntu's patched pip wheel reads /etc/ssl/certs, absent in the offline
   sandbox — a product limitation to note in docs, not fixed).
 
+- P6 remote merged (26 tests): TLS 1.3 WSS `yourbot-remote/1`, cert pinning, Ed25519 device
+  auth, single-use pairing codes, revocation, MultiHostClient, `your-bot-remote` CLI. Contract
+  `BackendTransportV2` added. P1 integration must return `INVALID_CURSOR` for a future
+  `afterSequence`. Limits: host-wide pairing throttle can be griefed; no cert rotation.
+
 ## In flight
 Wave 1: P1 core v2, P2 trusted ACP, P3 workspace host,
 (keep ≤5 concurrent delegates on this 4-core/15 GB host; an OOM SIGKILL hit P5 once)

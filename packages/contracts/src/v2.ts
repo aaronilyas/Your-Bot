@@ -299,6 +299,7 @@ export interface AppSnapshotV2 extends Omit<AppSnapshot, 'sessions' | 'settings'
 /* ------------------------------------------------------------------ commands */
 
 export type CommandPayloadV2 =
+  /** An afterSequence beyond the latest event fails with error code INVALID_CURSOR. */
   | { type: 'state.sync'; afterSequence?: number }
   | { type: 'bot.create'; bot: BotInput }
   | { type: 'bot.update'; botId: BotId; patch: Partial<BotInput> }
@@ -366,6 +367,13 @@ export interface DesktopGatewayV2 extends Omit<DesktopGateway, 'dispatch' | 'sub
   dispatch(command: AnyDesktopCommand, principal: Principal | PrincipalV2): Promise<AnyCommandResult>;
   subscribe(listener: (event: DesktopEventV2) => void, principal: Principal | PrincipalV2, options?: SubscribeOptions): Unsubscribe;
   cancelTask(taskId: TaskId, principal: Principal | PrincipalV2): Promise<void>;
+}
+
+/** Client-side transport for v2 commands/events (remote clients, v2 desktop renderer). */
+export interface BackendTransportV2 {
+  dispatch(command: DesktopCommandV2): Promise<CommandResultV2>;
+  subscribe(listener: (event: DesktopEventV2) => void): Unsubscribe;
+  close?(): Promise<void>;
 }
 
 /* ------------------------------------------------- adapter-facing (non-wire) */
