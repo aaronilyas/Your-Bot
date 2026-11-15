@@ -73,10 +73,7 @@ export class StdioRpc {
       this.incoming.add(id as RpcId);
       void this.onRequest(message.method, message.params).then(
         result => this.reply(id as RpcId, { result }),
-        error => this.reply(id as RpcId, { error: {
-          code: error instanceof MethodNotFound ? -32601 : error instanceof InvalidParams ? -32602 : -32603,
-          message: error instanceof MethodNotFound ? 'Method not supported' : error instanceof InvalidParams ? 'Invalid parameters' : 'Client request failed',
-        } }),
+        error => this.reply(id as RpcId, { error: rpcError(error) }),
       ).finally(() => this.incoming.delete(id as RpcId));
       return;
     }
@@ -143,5 +140,20 @@ export class StdioRpc {
   }
 }
 
+function rpcError(error: unknown): { code: number; message: string; data?: { code: string } } {
+  if (error instanceof MethodNotFound) return { code: -32601, message: 'Method not supported' };
+  if (error instanceof InvalidParams) return { code: -32602, message: 'Invalid parameters' };
+  if (error instanceof ClientRpcError && error.data) return { code: -32603, message: 'Client request failed', data: error.data };
+  return { code: -32603, message: 'Client request failed' };
+}
+
 export class MethodNotFound extends Error {}
 export class InvalidParams extends Error {}
+
+/** JSON-RPC error for a host rejection. `data.code` is a StructuredError code. */
+export class ClientRpcError extends Error {
+  constructor(message: string, readonly data?: { code: string }) {
+    super(message);
+    this.name = 'ClientRpcError';
+  }
+}
