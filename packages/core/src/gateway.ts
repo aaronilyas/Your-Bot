@@ -837,8 +837,13 @@ export class Gateway {
 
   /* --------------------------------------------------- notifications (P4) */
 
+  /** Strips control characters (except newline/tab) since text can include agent-influenced content. */
+  private static sanitizeNotificationText(text: string): string { return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); }
+
   private notify(owner: string, input: Omit<OwnerNotification, 'id' | 'createdAt' | 'acknowledgedAt'>): void {
-    const notification: OwnerNotification = this.scrub({ id: randomUUID(), ...input, title: input.title.slice(0, 256), body: input.body.slice(0, 4096), createdAt: this.isoNow() });
+    const title = Gateway.sanitizeNotificationText(input.title).slice(0, 200);
+    const body = Gateway.sanitizeNotificationText(input.body).slice(0, 1000);
+    const notification: OwnerNotification = this.scrub({ id: randomUUID(), ...input, title, body, createdAt: this.isoNow() });
     this.store.addNotification(owner, notification);
     this.emit(owner, { type: 'notification', notification });
     try { this.options.notifier?.notify(clone(notification)); } catch { /* A failing notifier never affects routines. */ }
