@@ -272,7 +272,9 @@ async function openSession(input: OpenInput, options: McpBrokerOptions, onClosed
 }
 
 async function connectUpstream(config: McpServerConfig, options: McpBrokerOptions, timeoutMs: number, signal: AbortSignal): Promise<Upstream> {
-  const expanded = expandPreset(config);
+  // Hosts are expected to call expandPreset(); expand here only a preset that was left unexpanded,
+  // so an already expanded config (possibly with host-added args) is used as given.
+  const expanded = config.preset && (config.transport !== 'stdio' || !config.command) ? expandPreset(config) : config;
   let transport: Transport;
   if (expanded.transport === 'stdio') {
     if (!expanded.command) throw new Error('Missing command');
