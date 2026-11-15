@@ -110,7 +110,9 @@ function offsetAt(instant: number, timeZone: string): number { return wallTime(i
  * none in a gap. `gapShift` receives the gap-shifted instant for nonexistent times.
  */
 function instantsFor(wall: number, timeZone: string): {instants: number[]; shifted?: number} {
-  const offsets = new Set([offsetAt(wall - SHIFT_WINDOW, timeZone), offsetAt(wall, timeZone), offsetAt(wall + SHIFT_WINDOW, timeZone)]);
+  // `wall - offset` is within one DST shift of the true instant; sample offsets around it.
+  const guess = wall - offsetAt(wall, timeZone);
+  const offsets = new Set([offsetAt(guess - SHIFT_WINDOW, timeZone), offsetAt(guess, timeZone), offsetAt(guess + SHIFT_WINDOW, timeZone)]);
   const instants = [...offsets].map(offset => wall - offset).filter(instant => wallTime(instant, timeZone) === wall);
   const unique = [...new Set(instants)].sort((a, b) => a - b);
   if (unique.length) return { instants: unique };

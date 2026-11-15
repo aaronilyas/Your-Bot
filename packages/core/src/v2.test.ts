@@ -63,12 +63,14 @@ describe('v2 command validation', () => {
     ok(await gateway.dispatch(cmd({ type: 'state.sync' }), owner));
   });
 
-  it('returns NOT_SUPPORTED for commands owned by later packages and for devices without a DeviceManager', async () => {
+  it('serves P4 commands and returns NOT_SUPPORTED for devices without a DeviceManager', async () => {
     const { gateway } = await setup(); const bot = await createBot(gateway, botInput({ agentId: 'fake' }));
-    for (const payload of [
-      { type: 'memory.list' as const, botId: bot.id }, { type: 'skills.refresh' as const }, { type: 'notification.ack' as const, notificationId: 'n' },
-      { type: 'routine.runNow' as const, routineId: 'r' }, { type: 'device.list' as const },
-    ]) expect(await gateway.dispatch(cmd(payload), owner)).toMatchObject({ ok: false, error: { code: 'NOT_SUPPORTED' } });
+    ok(await gateway.dispatch(cmd({ type: 'memory.list', botId: bot.id }), owner));
+    ok(await gateway.dispatch(cmd({ type: 'skills.refresh' }), owner));
+    for (const payload of [{ type: 'notification.ack' as const, notificationId: 'n' }, { type: 'routine.runNow' as const, routineId: 'r' }]) {
+      expect(await gateway.dispatch(cmd(payload), owner)).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    }
+    expect(await gateway.dispatch(cmd({ type: 'device.list' }), owner)).toMatchObject({ ok: false, error: { code: 'NOT_SUPPORTED' } });
   });
 });
 
@@ -168,6 +170,22 @@ describe('bots and sessions', () => {
     const other = await createBot(f.gateway, botInput({ agentId: 'fake' }));
     expect(await f.gateway.dispatch(cmd({ type: 'bot.update', botId: other.id, patch: { name: 'x' } }), stranger)).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
     expect(await f.gateway.dispatch(cmd({ type: 'bot.create', bot: botInput() }), { ...owner, capabilities: ['conversation'] })).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } });
+  });
+
+  it('clears modelId, workspace and compaction with a null patch and rejects null for required fields', async () => {
+    const f = await setup();
+    const workspace = await directory();
+    const bot = await createBot(f.gateway, botInput({ modelId: 'model', workspace, compaction: { maxMessages: 10, keepRecent: 4 } }));
+    expect(bot).toMatchObject({ modelId: 'model', workspace, compaction: { maxMessages: 10, keepRecent: 4 } });
+    const cleared = await f.gateway.dispatch(cmd({ type: 'bot.update', botId: bot.id, patch: { modelId: null, workspace: null, compaction: null } }), owner); ok(cleared);
+    for (const key of ['modelId', 'workspace', 'compaction']) expect(cleared.bot).not.toHaveProperty(key);
+    const sync = await f.gateway.dispatch(cmd({ type: 'state.sync' }), owner); ok(sync);
+    const stored = sync.snapshot!.bots.find(entry => entry.id === bot.id)!;
+    for (const key of ['modelId', 'workspace', 'compaction']) expect(stored).not.toHaveProperty(key);
+    expect(stored).toMatchObject({ name: 'Bot', agentId: 'host-agent' });
+    for (const patch of [{ name: null }, { instructions: null }, { profile: null }]) {
+      expect(await f.gateway.dispatch(cmd({ type: 'bot.update', botId: bot.id, patch: patch as never }), owner)).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
+    }
   });
 
   it('delivers bot instructions and persists bounded adapter state per (owner, session, adapter), deleted with the session', async () => {
