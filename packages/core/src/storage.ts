@@ -2,8 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type {
-  AnyCommandResult, AppSettingsV2, Bot, DesktopEventV2, EventPayloadV2, GrantAuditEntry, JsonValue, McpServerConfig, Principal, PrincipalV2,
-  SessionV2, StandingGrant,
+  AnyCommandResult, AppSettingsV2, Bot, ChatMessage, DesktopEventV2, EventPayloadV2, GrantAuditEntry, JsonValue, McpServerConfig, MemoryEntry,
+  OwnerNotification, Principal, PrincipalV2, Routine, RoutineRun, SessionV2, StandingGrant,
 } from '@your-bot/contracts';
 import { GatewayError } from './validation.js';
 import { isSealed, SecretBox, type Sealed } from './secrets.js';
@@ -53,7 +53,17 @@ export class Store {
       CREATE INDEX IF NOT EXISTS grants_bot ON grants(owner, bot_id);
       CREATE TABLE IF NOT EXISTS audit (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, bot_id TEXT NOT NULL, value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_owner ON audit(owner, sequence);
-      CREATE TABLE IF NOT EXISTS adapter_state (owner TEXT NOT NULL, session_id TEXT NOT NULL, adapter_id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(owner, session_id, adapter_id));`);
+      CREATE TABLE IF NOT EXISTS adapter_state (owner TEXT NOT NULL, session_id TEXT NOT NULL, adapter_id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(owner, session_id, adapter_id));
+      CREATE TABLE IF NOT EXISTS memory (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, bot_id TEXT NOT NULL, value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS memory_bot ON memory(owner, bot_id, seq);
+      CREATE TABLE IF NOT EXISTS archived_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, session_id TEXT NOT NULL, value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS archived_session ON archived_messages(owner, session_id, seq);
+      CREATE TABLE IF NOT EXISTS routines (id TEXT PRIMARY KEY, owner TEXT NOT NULL, bot_id TEXT NOT NULL, anchor INTEGER NOT NULL, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS routine_runs (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, routine_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS routine_runs_routine ON routine_runs(routine_id, seq);
+      CREATE INDEX IF NOT EXISTS routine_runs_status ON routine_runs(status);
+      CREATE TABLE IF NOT EXISTS notifications (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0, value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS notifications_owner ON notifications(owner, acknowledged, seq);`);
     // v2: events may target one principal (snapshots, replays) instead of every subscriber of the owner.
     const columns = (this.db.prepare('PRAGMA table_info(events)').all() as Row[]).map(row => row.name);
     if (!columns.includes('target')) this.db.exec('ALTER TABLE events ADD COLUMN target TEXT');
@@ -91,6 +101,7 @@ export class Store {
     this.transaction(() => {
       this.db.prepare('DELETE FROM sessions WHERE id=? AND owner=?').run(id, owner);
       this.db.prepare('DELETE FROM adapter_state WHERE session_id=? AND owner=?').run(id, owner);
+      this.db.prepare('DELETE FROM archived_messages WHERE session_id=? AND owner=?').run(id, owner);
     });
   }
   settings(owner: string): AppSettingsV2 {
@@ -232,6 +243,93 @@ export class Store {
       ? this.db.prepare('SELECT value FROM audit WHERE owner=? AND bot_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?').all(owner, options.botId, before, options.limit)
       : this.db.prepare('SELECT value FROM audit WHERE owner=? AND sequence<? ORDER BY sequence DESC LIMIT ?').all(owner, before, options.limit)) as Row[];
     return rows.map(row => JSON.parse(row.value as string) as GrantAuditEntry);
+  }
+
+  /* -------------------------------------------------------------- memory */
+  /** Newest first. */
+  memory(owner: string, botId: string): MemoryEntry[] {
+    return (this.db.prepare('SELECT value FROM memory WHERE owner=? AND bot_id=? ORDER BY seq DESC').all(owner, botId) as Row[]).map(row => JSON.parse(row.value as string) as MemoryEntry);
+  }
+  memoryCount(owner: string, botId: string): number { return Number((this.db.prepare('SELECT COUNT(*) AS n FROM memory WHERE owner=? AND bot_id=?').get(owner, botId) as Row).n); }
+  addMemory(owner: string, entry: MemoryEntry): void { this.db.prepare('INSERT INTO memory(id,owner,bot_id,value) VALUES (?,?,?,?)').run(entry.id, owner, entry.botId, JSON.stringify(entry)); }
+  deleteMemory(owner: string, botId: string, id: string): boolean { return Number(this.db.prepare('DELETE FROM memory WHERE owner=? AND bot_id=? AND id=?').run(owner, botId, id).changes) > 0; }
+  deleteBotMemory(owner: string, botId: string): void { this.db.prepare('DELETE FROM memory WHERE owner=? AND bot_id=?').run(owner, botId); }
+
+  /* --------------------------------------------------------- compaction */
+  /** Moves `archived` to the archive table and saves the compacted session, atomically. */
+  compactSession(owner: string, session: SessionV2, archived: ChatMessage[]): void {
+    this.transaction(() => {
+      const insert = this.db.prepare('INSERT INTO archived_messages(owner,session_id,value) VALUES (?,?,?)');
+      for (const message of archived) insert.run(owner, session.id, JSON.stringify(message));
+      this.saveSession(owner, session);
+    });
+  }
+  archivedMessages(owner: string, sessionId: string): ChatMessage[] {
+    return (this.db.prepare('SELECT value FROM archived_messages WHERE owner=? AND session_id=? ORDER BY seq').all(owner, sessionId) as Row[]).map(row => JSON.parse(row.value as string) as ChatMessage);
+  }
+
+  /* ------------------------------------------------------------ routines */
+  routines(owner?: string): {owner: string; routine: Routine; anchor: number}[] {
+    const rows = (owner === undefined ? this.db.prepare('SELECT owner,anchor,value FROM routines ORDER BY rowid').all() : this.db.prepare('SELECT owner,anchor,value FROM routines WHERE owner=? ORDER BY rowid').all(owner)) as Row[];
+    return rows.map(row => ({ owner: row.owner as string, anchor: Number(row.anchor), routine: JSON.parse(row.value as string) as Routine }));
+  }
+  getRoutine(id: string, owner: string): {routine: Routine; anchor: number} {
+    const row = this.db.prepare('SELECT anchor,value FROM routines WHERE id=? AND owner=?').get(id, owner) as Row | undefined;
+    if (!row) throw new GatewayError('NOT_FOUND', 'Routine not found');
+    return { routine: JSON.parse(row.value as string) as Routine, anchor: Number(row.anchor) };
+  }
+  findRoutine(id: string, owner: string): {routine: Routine; anchor: number} | undefined { try { return this.getRoutine(id, owner); } catch { return undefined; } }
+  saveRoutine(owner: string, routine: Routine, anchor: number): void {
+    this.db.prepare('INSERT INTO routines(id,owner,bot_id,anchor,value) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET bot_id=excluded.bot_id, anchor=excluded.anchor, value=excluded.value WHERE routines.owner=excluded.owner')
+      .run(routine.id, owner, routine.botId, anchor, JSON.stringify(routine));
+  }
+  deleteRoutine(id: string, owner: string): void {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM routine_runs WHERE routine_id=? AND owner=?').run(id, owner);
+      this.db.prepare('DELETE FROM routines WHERE id=? AND owner=?').run(id, owner);
+    });
+  }
+  saveRun(owner: string, run: RoutineRun): void {
+    this.db.prepare('INSERT INTO routine_runs(id,owner,routine_id,status,value) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, value=excluded.value WHERE routine_runs.owner=excluded.owner')
+      .run(run.id, owner, run.routineId, run.status, JSON.stringify(run));
+  }
+  getRun(id: string): {owner: string; run: RoutineRun} | undefined {
+    const row = this.db.prepare('SELECT owner,value FROM routine_runs WHERE id=?').get(id) as Row | undefined;
+    return row ? { owner: row.owner as string, run: JSON.parse(row.value as string) as RoutineRun } : undefined;
+  }
+  /** Newest first. */
+  runs(owner: string, routineId: string, limit: number): RoutineRun[] {
+    return (this.db.prepare('SELECT value FROM routine_runs WHERE owner=? AND routine_id=? ORDER BY seq DESC LIMIT ?').all(owner, routineId, limit) as Row[]).map(row => JSON.parse(row.value as string) as RoutineRun);
+  }
+  /** Runs in the given statuses, oldest first (every owner when `owner` is undefined). */
+  runsWithStatus(statuses: string[], owner?: string): {owner: string; run: RoutineRun}[] {
+    const marks = statuses.map(() => '?').join(',');
+    const rows = (owner === undefined
+      ? this.db.prepare(`SELECT owner,value FROM routine_runs WHERE status IN (${marks}) ORDER BY seq`).all(...statuses)
+      : this.db.prepare(`SELECT owner,value FROM routine_runs WHERE owner=? AND status IN (${marks}) ORDER BY seq`).all(owner, ...statuses)) as Row[];
+    return rows.map(row => ({ owner: row.owner as string, run: JSON.parse(row.value as string) as RoutineRun }));
+  }
+  /** Newest finished runs of an owner. */
+  recentRuns(owner: string, excluded: string[], limit: number): RoutineRun[] {
+    const marks = excluded.map(() => '?').join(',');
+    return (this.db.prepare(`SELECT value FROM routine_runs WHERE owner=? AND status NOT IN (${marks}) ORDER BY seq DESC LIMIT ?`).all(owner, ...excluded, limit) as Row[]).map(row => JSON.parse(row.value as string) as RoutineRun);
+  }
+
+  /* ------------------------------------------------------- notifications */
+  addNotification(owner: string, notification: OwnerNotification): void {
+    this.db.prepare('INSERT INTO notifications(id,owner,acknowledged,value) VALUES (?,?,0,?)').run(notification.id, owner, JSON.stringify(notification));
+  }
+  /** Unacknowledged, newest first. */
+  notifications(owner: string, limit: number): OwnerNotification[] {
+    return (this.db.prepare('SELECT value FROM notifications WHERE owner=? AND acknowledged=0 ORDER BY seq DESC LIMIT ?').all(owner, limit) as Row[]).map(row => JSON.parse(row.value as string) as OwnerNotification);
+  }
+  getNotification(id: string, owner: string): OwnerNotification {
+    const row = this.db.prepare('SELECT value FROM notifications WHERE id=? AND owner=?').get(id, owner) as Row | undefined;
+    if (!row) throw new GatewayError('NOT_FOUND', 'Notification not found');
+    return JSON.parse(row.value as string) as OwnerNotification;
+  }
+  acknowledgeNotification(owner: string, notification: OwnerNotification): void {
+    this.db.prepare('UPDATE notifications SET acknowledged=1, value=? WHERE id=? AND owner=?').run(JSON.stringify(notification), notification.id, owner);
   }
 
   /* ------------------------------------------------------- adapter state */

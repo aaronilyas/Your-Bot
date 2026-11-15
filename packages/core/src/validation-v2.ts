@@ -240,7 +240,7 @@ export function validateTerminalCreate(value: unknown): HostTerminalCreateReques
 }
 export function validateTerminalId(value: unknown): asserts value is string { string(value, 'terminal id', 256); }
 
-function validateRoutineInput(value: unknown, partial: boolean): void {
+export function validateRoutineInput(value: unknown, partial: boolean): void {
   const keys = ['botId', 'name', 'prompt', 'schedule', 'missedRunPolicy', 'maxCatchUp', 'enabled', 'sessionMode'];
   const object = record(value, keys, partial ? [] : ['botId', 'name', 'prompt', 'schedule', 'missedRunPolicy', 'enabled', 'sessionMode']);
   optional(object, 'botId', v => id(v, 'bot id'));

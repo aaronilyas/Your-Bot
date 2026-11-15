@@ -1,4 +1,5 @@
 import type { PermissionInputV2, TerminalExitStatus, TerminalOutput, WorkspaceHost, WorkspaceHostChannel } from '@your-bot/contracts';
+import { lstat } from 'node:fs/promises';
 import { isDatabasePath, isWithin } from './paths.js';
 import { GatewayError, record, string } from './validation.js';
 import { validateHostRead, validateHostWrite, validateTerminalCreate, validateTerminalId } from './validation-v2.js';
@@ -67,6 +68,10 @@ export function createHostChannel(deps: HostChannelDependencies): WorkspaceHostC
       ensureLive(); const input = validateHostRead(raw);
       const read = (path: string): HostPermission => ({ capability: 'file.read', reason: `Agent reads ${path}`, paths: [{ path, access: 'read' }], botId: deps.botId });
       const path = await resolve(input.path, read);
+      // A missing file inside the workspace is NOT_FOUND (the pipeline only grants existing files).
+      try { await lstat(path); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') throw new GatewayError('NOT_FOUND', 'File not found');
+      }
       await allow(read(path));
       const content = await deps.host.readTextFile(deps.workspace, path, { ...(input.line !== undefined ? { line: input.line } : {}), ...(input.limit !== undefined ? { limit: input.limit } : {}), signal: deps.signal });
       string(content, 'file content', 64 * 1024 * 1024, true);
