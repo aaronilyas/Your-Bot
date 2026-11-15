@@ -30,9 +30,8 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   `afterSequence`. Limits: host-wide pairing throttle can be griefed; no cert rotation.
 
 ## In flight
-Wave 1: P1 core v2, P2 trusted ACP, P3 workspace host,
-(keep ≤5 concurrent delegates on this 4-core/15 GB host; an OOM SIGKILL hit P5 once)
-P6 remote.
+Wave 1: P1 core v2, P2 trusted ACP, P3 workspace host. Keep ≤5 concurrent delegates on this
+4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
 
 ## Next
 Wave 2: P4 continuity+routines, P8 runtime+headless host, P9 desktop UI. Wave 3: P10 demo and
