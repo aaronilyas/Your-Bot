@@ -19,7 +19,7 @@ async function validateHost() { try {
     await new Promise(resolve => setTimeout(resolve, 500));
     return { keys: Object.keys(transport).sort(), node: typeof require, snapshot, forged, title: document.title, text: document.body.innerText, csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content };
   })()`);
-  assert.deepEqual(result.keys, ['dispatch', 'subscribe']); assert.equal(result.node, 'undefined');
+  assert.deepEqual(result.keys, ['chooseDirectory', 'dispatch', 'subscribe']); assert.equal(result.node, 'undefined');
   assert.equal(result.snapshot.snapshot.settings.providers[0].apiKey, undefined);
   assert.equal(result.forged.ok, false); assert.equal(result.forged.error.code, 'INVALID_COMMAND');
   assert.equal(result.title, 'Your Bot'); assert.match(result.text, /Where shall we begin/); assert.match(result.text, /Backend connected/);
