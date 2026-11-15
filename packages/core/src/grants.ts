@@ -67,8 +67,8 @@ export function matches(grant: StandingGrant, request: PermissionInputV2 & {env?
       if (!workspace || !command || !prefix?.length || request.env) return false;
       const folder = scope.folder ?? workspace;
       if (!isWithin(workspace, folder, platform) || !isWithin(folder, command.cwd, platform)) return false;
-      const argv = [command.command, ...command.args];
-      return prefix.length <= argv.length && prefix.every((token, index) => token === argv[index]);
+      const argv = command.args.length ? [command.command, ...command.args] : shellTokens(command.command);
+      return !!argv && prefix.length <= argv.length && prefix.every((token, index) => token === argv[index]);
     }
     case 'mcp.call':
       return !!request.mcp && !!scope.mcp && scope.mcp.serverId === request.mcp.serverId && (scope.mcp.tool === undefined || scope.mcp.tool === request.mcp.tool);
@@ -88,4 +88,14 @@ export function subject(request: PermissionInputV2): string {
   else if (request.packages?.length) text = request.packages.join(' ');
   else text = request.reason.split('\n')[0];
   return text.slice(0, 4096);
+}
+
+/**
+ * Tokens of an args-less command (a shell command line, see WorkspaceHost). Returns undefined when
+ * the line contains any shell syntax, so `git status; rm -rf ~` can never match a ["git"] grant.
+ */
+export function shellTokens(line: string): string[] | undefined {
+  if (/[;&|<>$`()*?!~"'{}\[\]#%^\\\n\r]/.test(line)) return undefined;
+  const tokens = line.split(/[ \t]+/).filter(Boolean);
+  return tokens.length ? tokens : undefined;
 }

@@ -7,7 +7,7 @@ export { WorkspaceError } from './errors.js';
 export type { WorkspaceErrorCode } from './errors.js';
 export { quoteBatchArgument, buildCmdCommandLine, cmdExeArguments } from './winquote.js';
 export { OutputBuffer } from './output.js';
-export { buildEnvironment, DEFAULT_OUTPUT_BYTE_LIMIT, MAX_RUNNING_TERMINALS_PER_TASK } from './terminals.js';
+export { buildEnvironment, isShellLine, DEFAULT_OUTPUT_BYTE_LIMIT, MAX_RUNNING_TERMINALS_PER_TASK } from './terminals.js';
 export { MAX_READ_BYTES } from './files.js';
 
 export interface WorkspaceHostOptions {

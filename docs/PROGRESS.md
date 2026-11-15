@@ -41,9 +41,17 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   a standing `tool.execute` grant by `agentToolKind` (e.g. 'execute') lets a trusted agent's own
   shell tool run any command without folder scoping; command-prefix grants match literally.
 
+- P2 trusted ACP merged (89 adapter tests; Windows 86/86 non-Linux; real Grok Build edited a
+  file and ran a command through core-mediated fs/terminal). Lead cross-package fix: Grok sends
+  terminal/create as one shell line with no args, so WorkspaceHost runs args-less lines with
+  whitespace/shell syntax via `/bin/sh -c` / `cmd.exe /d /s /c`, and such lines match a standing
+  commandPrefix grant only when they contain no shell syntax (tests in core + workspace).
+  Limitation: Grok reports models via `session/new.models`, not configOptions, so trusted Grok
+  bots must leave modelId unset until P8 adds that path.
+
 ## In flight
-Wave 1: P2 trusted ACP (Grok 4.7). Wave 2: P4 continuity+routines (feature/p4-continuity-routines),
-P9 desktop UI v2 (feature/p9-desktop-v2). P8 runtime+headless host starts after P2 merges. Keep ≤5 concurrent delegates on this
+Wave 2: P4 continuity+routines (feature/p4-continuity-routines),
+P9 desktop UI v2 (feature/p9-desktop-v2). P8 runtime+headless host. Keep ≤5 concurrent delegates on this
 4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
 
 ## Next

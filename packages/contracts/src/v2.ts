@@ -388,6 +388,11 @@ export interface BackendTransportV2 {
 
 export interface HostFileReadRequest { path: string; line?: number; limit?: number; }
 export interface HostFileWriteRequest { path: string; content: string; }
+/**
+ * When `args` is absent/empty and `command` contains whitespace or shell syntax, `command` is a
+ * shell command line run by the platform shell (`/bin/sh -c`; `cmd.exe /d /s /c` on Windows). Such a
+ * line matches a standing `commandPrefix` grant only if it contains no shell syntax at all.
+ */
 export interface HostTerminalCreateRequest {
   command: string; args?: string[]; env?: { name: string; value: string }[]; cwd?: string; outputByteLimit?: number;
 }

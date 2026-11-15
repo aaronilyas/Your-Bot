@@ -115,10 +115,17 @@ export class TerminalManager {
     try { if (!(await stat(cwd)).isDirectory()) throw new WorkspaceError('INVALID_REQUEST', 'cwd is not a directory'); } catch (error) { throw mapFsError(error, 'cwd'); }
 
     const env = buildEnvironment(this.baseEnv, request.env);
-    const resolved = await resolveCommand(request.command, env, cwd);
+    // A command with no args containing whitespace/shell syntax is a shell command line (ACP agents
+    // such as Grok Build send terminal/create this way). Core approved this exact string.
+    const shellLine = isShellLine(request.command, args);
+    const resolved = shellLine
+      ? { file: process.platform === 'win32' ? systemTool('cmd.exe') : '/bin/sh', batch: process.platform === 'win32' }
+      : await resolveCommand(request.command, env, cwd);
     let file = resolved.file;
     let spawnArgs = args;
-    if (resolved.batch) {
+    if (shellLine) {
+      spawnArgs = process.platform === 'win32' ? ['/d', '/s', '/c', `"${request.command}"`] : ['-c', request.command];
+    } else if (resolved.batch) {
       file = systemTool('cmd.exe');
       spawnArgs = cmdExeArguments(resolved.file, args);
     }
@@ -261,4 +268,9 @@ export class TerminalManager {
     this.closed = true;
     await Promise.allSettled([...this.terminals.keys()].map(id => this.release(id)));
   }
+}
+
+/** True when `command` (with no args) must run through the platform shell. */
+export function isShellLine(command: string, args: readonly string[]): boolean {
+  return args.length === 0 && /[\s;&|<>$`()*?!~"'{}\[\]#%^]/.test(command);
 }
