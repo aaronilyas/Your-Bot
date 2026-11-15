@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { CommandPayload, DesktopEvent, DesktopGateway, ToolInvocation } from '@your-bot/contracts';
-import { createGateway } from '@your-bot/core';
+import type { CommandPayload, CommandResultV2, DesktopCommandV2, DesktopEvent, DesktopEventV2, DesktopGateway, ToolInvocation } from '@your-bot/contracts';
+import { createGatewayV2 as createGateway } from '@your-bot/core';
 import { createAdapters, BubblewrapContainmentLauncher } from '@your-bot/adapters';
 import { createToolExecutor } from '@your-bot/executor';
 import { DesktopStore } from '../apps/desktop/src/renderer/store.js';
@@ -55,10 +55,10 @@ async function fixture(autoApprove = true, includeAcp = false) {
   cleanup.push(() => gateway.close());
   const events: DesktopEvent[] = [];
   const observe = () => gateway.subscribe(event => {
-    events.push(event);
+    events.push(event as DesktopEvent);
     if (autoApprove && event.type === 'permission.requested') void dispatch({ type: 'permission.decide', decision: { requestId: event.request.id, outcome: 'allow', scope: 'once' } });
   }, localPrincipal);
-  const dispatch = (payload: CommandPayload) => inProcessTransport(gateway, localPrincipal).dispatch({ ...payload, version: 1, id: randomUUID() });
+  const dispatch = (payload: CommandPayload) => inProcessTransport(gateway as unknown as DesktopGateway, localPrincipal).dispatch({ ...payload, version: 1, id: randomUUID() });
   observe();
   const created = await dispatch({ type: 'session.create', agentId: 'local', modelId: 'integration-model' });
   if (!created.ok || !created.sessionId) throw new Error(JSON.stringify(created));
@@ -70,8 +70,9 @@ async function fixture(autoApprove = true, includeAcp = false) {
     return terminal(result.taskId);
   };
   return { root, executor, dispatch, events, sessionId, tool, terminal, transport: {
-    dispatch: (command: Parameters<DesktopGateway['dispatch']>[0]) => gateway.dispatch(command, localPrincipal),
-    subscribe: (listener: (event: DesktopEvent) => void) => gateway.subscribe(listener, localPrincipal),
+    // The renderer store speaks contract v2 (P9); the gateway is the v1+v2 factory.
+    dispatch: (command: DesktopCommandV2) => gateway.dispatch(command, localPrincipal) as Promise<CommandResultV2>,
+    subscribe: (listener: (event: DesktopEventV2) => void) => gateway.subscribe(listener, localPrincipal, { contractVersion: 2 }),
   }, restart: async () => {
     await gateway.close();
     // Gateway close owns executor shutdown; a restarted host gets a new executor.

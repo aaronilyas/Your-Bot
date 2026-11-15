@@ -57,11 +57,14 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   P5's broker only expands presets with an empty command, so the runtime (P8 merge) must wrap the
   broker to always `expandPreset` configs that carry `preset`. Core should bound notification text.
 
+- P4 continuity+routines merged (fcd8ebc; core 85 tests). GatewayOptions: skillCatalog, notifier,
+  clock, routineCapabilities, summarizeTimeoutMs. Blocked runs wait indefinitely; after a restart
+  they become `interrupted` (not resumed). Timer >60 s late = missed. Whole repo after merge:
+  443 pass, only the 10 Arch-environmental strict failures. Lead fixed tests/integration.test.ts
+  to drive the v2 renderer store through createGatewayV2.
+
 ## In flight (stopped early 2026-11-15: Claude 5-hour usage limit; resets 9:10pm ET)
 Work was rerouted to other providers before stopping; check these branches first:
-- P4 continuity+routines: `feature/p4-continuity-routines` (pushed, 4c17ec8; core 83/83 green;
-  final spec audit not done). Antigravity hit its quota (resets ~2026-11-21); continuation now
-  running on Grok 4.7: audit vs the P4 spec, fill gaps, README. Review then merge.
 - P8 runtime+headless host: `feature/p8-runtime-host` (pushed). Only 8824c6a done (local adapter
   system message; Grok `session/new.models` + `session/set_model`). Continuation running on
   Grok 4.7: packages/runtime, desktop backend → createGatewayV2, apps/host + control channel,
@@ -72,7 +75,7 @@ Work was rerouted to other providers before stopping; check these branches first
   `git worktree list`, then `git worktree remove` the stale one after committing).
 
 ## Next
-1. Review + merge P4 and P8 (tests, targeted diff review of authorization/control channel).
+1. Review + merge P8 (tests, targeted diff review of authorization/control channel).
 2. Full validation: `npm run build`, `npm run typecheck`, `npx vitest run` (expect only the 10
    Arch-environmental strict failures), `npm run test:linux` (must be fully green), `npm run
    package` + `npm run test:desktop` (desktop smoke; preload now has chooseDirectory), visual
