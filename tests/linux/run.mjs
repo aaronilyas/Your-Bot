@@ -2,7 +2,7 @@
 //   node tests/linux/run.mjs [--only <step>] [--keep-image]
 // Steps: build, typecheck, vitest, security, integration  (npm ci runs at image build).
 // Env: YOUR_BOT_LINUX_FILTER="<vitest filters>" is appended to the vitest step.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -50,16 +50,26 @@ console.log(`== image ready in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 
 // 2. Tests: no network, no host mounts. SYS_ADMIN + unconfined seccomp/apparmor/systempaths let
 // bubblewrap create nested namespaces and mount proc inside this disposable container only.
+// One container for all steps so build output (dist) carries over; removed on exit.
+const NAME = `your-bot-linux-${process.pid}`;
+const started = await spawnP('docker', ['run', '-d', '--name', NAME, '--network', 'none', '--cap-add', 'SYS_ADMIN',
+  '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined',
+  '--security-opt', 'systempaths=unconfined', IMAGE, 'sleep', 'infinity'], { stdio: ['ignore', 'ignore', 'inherit'] });
+if (started !== 0) { console.error('container start FAILED'); process.exit(1); }
+const cleanup = () => spawnSync('docker', ['rm', '-f', NAME], { stdio: 'ignore' });
+process.on('SIGINT', () => { cleanup(); process.exit(130); });
 const results = [];
-for (const [name, cmd] of Object.entries(STEPS)) {
-  if (only && only !== name) continue;
-  const s = Date.now();
-  console.log(`\n== step ${name}: ${cmd}`);
-  const code = await spawnP('docker', ['run', '--rm', '--network', 'none', '--cap-add', 'SYS_ADMIN',
-    '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined',
-    '--security-opt', 'systempaths=unconfined', IMAGE, 'sh', '-c', cmd], { stdio: 'inherit' });
-  results.push({ name, code, secs: ((Date.now() - s) / 1000).toFixed(1) });
-}
+try {
+  for (const [name, cmd] of Object.entries(STEPS)) {
+    if (only && only !== name) continue;
+    // Steps other than build/typecheck need dist; build first when running a single later step.
+    const s = Date.now();
+    console.log(`\n== step ${name}: ${cmd}`);
+    const prefix = only && name !== 'build' ? 'npm run build >/dev/null 2>&1 && ' : '';
+    const code = await spawnP('docker', ['exec', NAME, 'sh', '-c', prefix + cmd], { stdio: 'inherit' });
+    results.push({ name, code, secs: ((Date.now() - s) / 1000).toFixed(1) });
+  }
+} finally { cleanup(); }
 console.log('\n== summary');
 for (const r of results) console.log(`${r.code === 0 ? 'PASS' : 'FAIL'}  ${r.name}  (${r.secs}s)`);
 const failed = results.filter(r => r.code !== 0);
