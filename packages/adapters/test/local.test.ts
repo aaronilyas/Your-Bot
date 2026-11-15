@@ -57,6 +57,24 @@ describe('OpenAI-compatible local HTTP adapters', () => {
     expect(body).toMatchObject({ model: 'test-model', stream: true, messages: [{ role: 'user', content: 'Hello' }], tools: [{ function: { name: 'execute_tool' } }] });
   });
 
+  it('sends v2 instructions and the compaction summary as one leading system message', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const { adapter } = await setup(async (req, res) => {
+      bodies.push(await readBody(req));
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.end(event({ content: 'ok' }) + event({}, 'stop') + 'data: [DONE]\n\n');
+    });
+    const base = context();
+    const v2 = { ...base, instructions: 'Be terse.', session: { ...base.session, summary: 'User likes tea.' } };
+    await adapter.run(v2 as typeof base);
+    expect(bodies[0].messages).toEqual([
+      { role: 'system', content: 'Be terse.\n\nEarlier conversation summary:\nUser likes tea.' },
+      { role: 'user', content: 'Hello' },
+    ]);
+    await adapter.run(context());
+    expect(bodies[1].messages).toEqual([{ role: 'user', content: 'Hello' }]);
+  });
+
   it('discovers a fallback model and honors the session model override', async () => {
     const models: unknown[] = [];
     let discoveries = 0;

@@ -10,6 +10,8 @@ let activeSession = sid;
 let promptId;
 let next = 100;
 const pending = new Map();
+// mode 'session-models': Grok Build style session/new.models + session/set_model (no configOptions).
+const sessionModels = { currentModelId: 'a', availableModels: [{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B', description: 'Bee' }] };
 const configOptions = [{ id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: 'a', options: [{ value: 'a', name: 'A' }, { value: 'b', name: 'B' }] }];
 
 const send = value => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
@@ -97,7 +99,11 @@ readline.createInterface({ input: process.stdin }).on('line', raw => {
     reply(msg.id, { configOptions });
   } else if (msg.method === 'session/new') {
     activeSession = sid;
-    reply(msg.id, { sessionId: sid, configOptions });
+    reply(msg.id, mode === 'session-models' ? { sessionId: sid, models: sessionModels } : { sessionId: sid, configOptions });
+  } else if (msg.method === 'session/set_model') {
+    if (!sessionModels.availableModels.some(model => model.modelId === msg.params.modelId)) { fail(msg.id, -32602, 'unknown model'); return; }
+    sessionModels.currentModelId = msg.params.modelId;
+    reply(msg.id, { _meta: { model: { Ok: msg.params.modelId } } });
   } else if (msg.method === 'session/set_config_option') {
     configOptions[0].currentValue = msg.params.value;
     reply(msg.id, { configOptions });

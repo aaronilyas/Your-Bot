@@ -3,7 +3,7 @@ import { isAbsolute } from 'node:path';
 import type {
   AgentRunContext, AgentRunContextV2, ChatMessage, JsonValue, ModelInfo, SessionV2,
 } from '@your-bot/contracts';
-import { modelSelector } from './acp-models.js';
+import { modelSelector, sessionModels } from './acp-models.js';
 import { AdapterError, normalizeAdapterError, record } from './errors.js';
 import type { HostedAgent, HostLauncher } from './host-launcher.js';
 import { abortable, RunManager, type RunScope, throwIfAborted } from './lifecycle.js';
@@ -127,10 +127,20 @@ async function terminateAgent(agent: HostedAgent, shutdownMs: number): Promise<v
   finally { clearTimeout(timer); }
 }
 
-async function selectModel(rpc: StdioRpc, scope: RunScope, sessionId: string, configOptions: unknown, requested: string | undefined, setModels: (models: ModelInfo[]) => void): Promise<void> {
-  const selector = modelSelector(configOptions);
+async function selectModel(rpc: StdioRpc, scope: RunScope, sessionId: string, result: Record<string, unknown>, requested: string | undefined, setModels: (models: ModelInfo[]) => void): Promise<void> {
+  const selector = modelSelector(result.configOptions);
+  // Agents without a model configOption may report session models instead (Grok Build).
+  const listed = selector ? undefined : sessionModels(result.models);
   if (selector) setModels(selector.models);
+  else if (listed) setModels(listed.models);
   if (!requested) return;
+  if (listed) {
+    if (!listed.models.some(item => item.id === requested)) throw new AdapterError('MODEL_UNAVAILABLE', 'Harness did not advertise the requested model.');
+    if (listed.current === requested) return;
+    // set_model has no standard confirmation payload; a JSON-RPC error means it was not applied.
+    await abortable(rpc.request('session/set_model', { sessionId, modelId: requested }), scope.signal);
+    return;
+  }
   if (!selector || !selector.models.some(item => item.id === requested)) throw new AdapterError('MODEL_UNAVAILABLE', 'Harness did not advertise the requested model.');
   if (selector.current === requested) return;
   const changed = record(await abortable(rpc.request('session/set_config_option', { sessionId, configId: selector.id, value: requested }), scope.signal));
@@ -316,7 +326,7 @@ export async function runTrustedAcp(deps: TrustedAcpDeps, input: AgentRunContext
     const sameWorkspace = stored?.cwd === context.workspace;
     const instructions = context.instructions ?? '';
     let loaded = false;
-    let configOptions: unknown;
+    let sessionResult: Record<string, unknown> = {};
     if (canLoad && stored && sameWorkspace) {
       sessionId = stored.acpSessionId;
       acceptHost = true;
@@ -327,7 +337,7 @@ export async function runTrustedAcp(deps: TrustedAcpDeps, input: AgentRunContext
             ? { systemPrompt: { mode: 'append', content: [{ type: 'text', text: instructions }] } } : {}),
         }), scope.signal));
         loaded = true;
-        configOptions = result.configOptions;
+        sessionResult = result;
       } catch (error) {
         sessionId = undefined;
         acceptHost = false;
@@ -345,9 +355,9 @@ export async function runTrustedAcp(deps: TrustedAcpDeps, input: AgentRunContext
       if (typeof created.sessionId !== 'string' || !created.sessionId) throw new AdapterError('INVALID_RESPONSE', 'Harness returned an invalid session ID.');
       sessionId = created.sessionId;
       acceptHost = true;
-      configOptions = created.configOptions;
+      sessionResult = created;
     }
-    await selectModel(rpc, scope, sessionId!, configOptions, context.session.modelId ?? deps.modelId, deps.setModels);
+    await selectModel(rpc, scope, sessionId!, sessionResult, context.session.modelId ?? deps.modelId, deps.setModels);
     const appliedHash = deliverInPrompt ? (loaded ? stored?.instructionsHash ?? '' : '') : hash;
     await abortable(context.state.set({ acpSessionId: sessionId!, cwd: context.workspace!, instructionsHash: appliedHash }), scope.signal);
     const body = loaded ? newestUser(context.session.messages) : transcript(context.session);

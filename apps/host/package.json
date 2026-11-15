@@ -1,0 +1,17 @@
+{
+  "name": "@your-bot/host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless Your Bot host and owner control CLI",
+  "engines": { "node": ">=22.13.0" },
+  "bin": { "your-bot-host": "dist/bin.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/bin.js',0o755)\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@your-bot/contracts": "0.1.0",
+    "@your-bot/runtime": "0.1.0"
+  }
+}
