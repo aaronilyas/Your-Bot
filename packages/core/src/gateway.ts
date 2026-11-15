@@ -554,6 +554,7 @@ export class Gateway {
         const bot: Bot = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
         this.store.saveBot(owner, bot); this.rememberBotSecrets(bot);
         this.emit(owner, { type: 'bot.updated', bot: publicBot(bot) });
+        this.skillCache.delete(owner); // Workspace skills follow bot workspaces.
         return { ...success, bot: publicBot(bot) };
       }
       case 'bot.update': {
@@ -572,6 +573,7 @@ export class Gateway {
         const bot: Bot = { ...input, id: existing.id, createdAt: existing.createdAt, updatedAt: new Date().toISOString() };
         this.store.saveBot(owner, bot, this.store.isDefaultBot(bot.id) ? existing.agentId : undefined); this.rememberBotSecrets(bot);
         this.emit(owner, { type: 'bot.updated', bot: publicBot(bot) });
+        this.skillCache.delete(owner); // Workspace skills follow bot workspaces.
         return { ...success, bot: publicBot(bot) };
       }
       case 'bot.delete': {
@@ -588,6 +590,7 @@ export class Gateway {
         }
         this.store.deleteBot(bot.id, owner);
         this.emit(owner, { type: 'bot.deleted', botId: bot.id });
+        this.skillCache.delete(owner);
         return success;
       }
       case 'grant.create': {
