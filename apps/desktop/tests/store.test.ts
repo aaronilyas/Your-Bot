@@ -48,13 +48,13 @@ describe('desktop state', () => {
     expect(store.getState().selectedSessionId).toBeUndefined();
     expect(Object.keys(store.getState().tasks)).toHaveLength(0);
   });
-  it('marks transport rejection disconnected, preserving command IDs and no identity field', async () => {
+  it('marks transport rejection disconnected, sending v2 commands with fresh IDs and no identity field', async () => {
     const transport: BackendTransport = { dispatch: vi.fn(async (_command: DesktopCommand) => { throw new Error('Connection lost'); }), subscribe: () => () => {} };
     const store = new DesktopStore(transport); store.start();
     await vi.waitFor(() => expect(store.getState().connection).toBe('disconnected'));
     expect(store.getState().error).toBe('Connection lost');
     const command = vi.mocked(transport.dispatch).mock.calls[0][0];
-    expect(command.version).toBe(1); expect(command.id).toMatch(/^[\da-f-]{36}$/); expect(command).not.toHaveProperty('principal');
+    expect(command.version).toBe(2); expect(command.id).toMatch(/^[\da-f-]{36}$/); expect(command).not.toHaveProperty('principal');
   });
   it('times out a stalled backend and releases command busy state', async () => {
     const store = new DesktopStore({ dispatch: () => new Promise(() => {}), subscribe: () => () => {} }, 10);

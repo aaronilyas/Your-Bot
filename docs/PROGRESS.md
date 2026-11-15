@@ -49,16 +49,44 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   Limitation: Grok reports models via `session/new.models`, not configOptions, so trusted Grok
   bots must leave modelId unset until P8 adds that path.
 
-## In flight
-Wave 2: P4 continuity+routines (feature/p4-continuity-routines),
-P9 desktop UI v2 (feature/p9-desktop-v2). P8 runtime+headless host. Keep ≤5 concurrent delegates on this
-4-core/15 GB host (OOM SIGKILLs hit P5, P6 and a lead npm ci; commit WIP and resume).
+- P9 desktop UI v2 merged (72 desktop tests): v2 IPC (strict schemas, main-owned principal now
+  with mcp.call, one extra preload API `chooseDirectory`), bots/trusted warning, approvals with
+  "Always allow…", permissions+audit, routines, notifications, devices/pairing, provider launch
+  mode. Not yet seen in a real browser/Electron window (CSS unverified) — run test:desktop and a
+  visual check at the end. Open: the UI sends the browser preset as {preset:'browser', command:'npx'};
+  P5's broker only expands presets with an empty command, so the runtime (P8 merge) must wrap the
+  broker to always `expandPreset` configs that carry `preset`. Core should bound notification text.
+
+## In flight (stopped early 2026-11-15: Claude 5-hour usage limit; resets 9:10pm ET)
+Work was rerouted to other providers before stopping; check these branches first:
+- P4 continuity+routines: `feature/p4-continuity-routines` (pushed). Claude agent reached 1b326bb
+  (core 83/83 green; final spec audit not done). Continuation running on Antigravity
+  (claude-opus-4-6-thinking): audit vs PLAN P4, fill gaps, README. Review then merge.
+- P8 runtime+headless host: `feature/p8-runtime-host` (pushed). Only 8824c6a done (local adapter
+  system message; Grok `session/new.models` + `session/set_model`). Continuation running on
+  Grok 4.7: packages/runtime, desktop backend → createGatewayV2, apps/host + control channel,
+  tests/v2-*.test.ts. On merge: drop the P4 option casts, enable any `.todo` routine test, verify
+  the McpBroker wrapper always expands `preset` configs.
+- If a continuation failed, its branch still holds the last commits; resume from it with
+  `git switch <branch>` in a new worktree (a branch can be checked out in only one worktree:
+  `git worktree list`, then `git worktree remove` the stale one after committing).
 
 ## Next
-Wave 2: P4 continuity+routines, P8 runtime+headless host, P9 desktop UI. Wave 3: P10 demo and
-cross-OS validation, docs, PR.
+1. Review + merge P4 and P8 (tests, targeted diff review of authorization/control channel).
+2. Full validation: `npm run build`, `npm run typecheck`, `npx vitest run` (expect only the 10
+   Arch-environmental strict failures), `npm run test:linux` (must be fully green), `npm run
+   package` + `npm run test:desktop` (desktop smoke; preload now has chooseDirectory), visual
+   check of the v2 UI (CSS never seen rendered).
+3. P10: scripted demo (`scripts/demo.mjs` or similar): headless host on this machine with a
+   trusted Grok Build bot editing a file and running a command; a routine firing unattended under
+   standing grants; the `ubuntu` host (has Node 26 + grok) pairing via `your-bot-remote pair` and
+   answering an approval. Cross-OS trusted tests: Windows via portable Node in %TEMP% (clone via
+   https; no GitHub SSH key there) with claude-agent-acp; macOS once `macmini` is unlocked.
+4. Docs: README, architecture, security (trusted-profile threat model, standing-grant caveats,
+   control channel, remote protocol), validation; then one PR integration → main.
 
 ## Open decisions / owner actions
+- Claude account hit its 5-hour limit during wave 2; Grok and Antigravity remain available.
 - `macmini` is locked (SSH refused until unlocked locally). macOS trusted-profile validation
   needs the owner to unlock it.
 - `ubuntu` SSH alias is Arch (Omarchy), not Ubuntu; strict/security suites run in an Ubuntu
