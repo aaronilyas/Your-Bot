@@ -76,6 +76,11 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   Grok (passed). `npm run test:linux` at 3574512: all steps green, vitest 463 pass / 3 opt-in skips,
   security 198, integration 5.
 
+- `npm run package` + `npm run test:desktop` green (packaged entrypoint, v2 renderer/preload/IPC,
+  approval dialog, real Python 42, cancellation, shutdown, restart). Lead fix: the ESM main bundle
+  failed on bundled CJS `ws` (`Dynamic require of "events"`); desktop build/dev scripts now inject a
+  createRequire banner. packaged-startup.sh prints the app log when the window never appears.
+
 ## In flight
 - P10 demo + cross-OS (see Next).
 
