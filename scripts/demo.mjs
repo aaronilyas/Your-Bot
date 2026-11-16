@@ -433,7 +433,6 @@ async function stepRoutine() {
   if (!routineId) throw new Error(`routine create returned ${JSON.stringify(created.trim())}`);
   log(`routine ${routineId} at ${at}`);
   const run = await waitUntil('routine completion', 600_000, async () => {
-    log(`routine reply: ${JSON.stringify((await assistantText(run.sessionId, run.taskId)).slice(0, 800))}`);
   if (state.routinePerms.length) throw new Error(`permission.requested during routine: ${state.routinePerms.map(summarizeRequest).join(' || ')}`);
     const events = state.events.filter(event => event.type === 'routine.run' && event.run?.routineId === routineId);
     const latest = events.at(-1)?.run;
