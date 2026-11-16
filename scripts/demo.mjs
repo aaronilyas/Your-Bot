@@ -374,7 +374,7 @@ async function stepConfigure() {
       }],
     },
   });
-  const instructions = 'Follow the latest user message exactly. Use only the client filesystem tool fs/write_text_file and the client terminal. Do not use built-in shell, edit, or other tools. Do not ask questions.';
+  const instructions = 'Follow the latest user message exactly and finish. Do not ask questions.';
   const created = await hostOk(['bot', 'create', '--name', 'Demo', '--agent', 'grok', '--profile', 'trusted', '--workspace', state.workspace, '--instructions', instructions]);
   const botId = /^bot (\S+)/m.exec(created)?.[1];
   if (!botId) throw new Error(`bot create returned ${JSON.stringify(created.trim())}`);
@@ -399,6 +399,9 @@ async function stepInteractive() {
   log(`interactive task ${sent.taskId}`);
   await waitTask(sent.taskId, 600_000);
   state.autoApprove = false;
+  const statuses = state.events.filter(event => event.type === 'task.status' && event.taskId === sent.taskId).map(event => event.status);
+  log(`agent statuses: ${[...new Set(statuses)].join(' | ')}`);
+  log(`agent reply: ${JSON.stringify((await assistantText(state.sessionId, sent.taskId)).slice(0, 800))}`);
   await assertFile('demo.txt', marker);
   const text = await assistantText(state.sessionId, sent.taskId);
   if (!text.includes(marker)) throw new Error(`command output did not appear in the assistant reply: ${JSON.stringify(text.slice(0, 500))}`);
@@ -430,7 +433,8 @@ async function stepRoutine() {
   if (!routineId) throw new Error(`routine create returned ${JSON.stringify(created.trim())}`);
   log(`routine ${routineId} at ${at}`);
   const run = await waitUntil('routine completion', 600_000, async () => {
-    if (state.routinePerms.length) throw new Error(`permission.requested during routine: ${state.routinePerms.map(summarizeRequest).join(' || ')}`);
+    log(`routine reply: ${JSON.stringify((await assistantText(run.sessionId, run.taskId)).slice(0, 800))}`);
+  if (state.routinePerms.length) throw new Error(`permission.requested during routine: ${state.routinePerms.map(summarizeRequest).join(' || ')}`);
     const events = state.events.filter(event => event.type === 'routine.run' && event.run?.routineId === routineId);
     const latest = events.at(-1)?.run;
     if (!latest) return undefined;
@@ -440,6 +444,7 @@ async function stepRoutine() {
     if (latest.status === 'completed') return latest;
     return undefined;
   });
+  log(`routine reply: ${JSON.stringify((await assistantText(run.sessionId, run.taskId)).slice(0, 800))}`);
   if (state.routinePerms.length) throw new Error(`permission.requested during routine: ${state.routinePerms.map(summarizeRequest).join(' || ')}`);
   await assertFile('routine.txt', routineMarker);
   const rows = await audits(run.taskId);
