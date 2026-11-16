@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { link, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, readFile, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -20,7 +20,8 @@ function adapter(run: (context: AgentRunContext) => Promise<void> = async contex
 function executor(run: (invocation: ToolInvocation, context: ToolExecutionContext) => ReturnType<ToolExecutor['execute']> = async () => ({ok: true, value: 'done'})): ToolExecutor {
   return { execute: vi.fn(run), cancel: vi.fn(async () => {}), close: vi.fn(async () => {}) };
 }
-async function directory(): Promise<string> { const dir = await mkdtemp(join(tmpdir(), 'your-bot-core-')); directories.push(dir); return dir; }
+// Canonical temp dirs: on macOS tmpdir() is under the /var -> /private/var symlink, and core authorizes canonical paths.
+async function directory(): Promise<string> { const dir = await realpath(await mkdtemp(join(tmpdir(), 'your-bot-core-'))); directories.push(dir); return dir; }
 async function setup(options: Partial<GatewayOptions> = {}) {
   const a = options.adapters?.[0] ?? adapter(); const e = options.executor ?? executor();
   const gateway = await createGateway({ databasePath: ':memory:', localPrincipalId: local.id, adapters: [a], executor: e, ...options }); gateways.push(gateway);

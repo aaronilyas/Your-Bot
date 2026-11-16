@@ -247,8 +247,11 @@ describe('limits', () => {
 
   it('rejects request bodies far beyond the limit with 413', async () => {
     const session = await open([]);
-    const response = await rawRequest(session.endpoint.url, { headers: jsonHeaders(session), body: 'x'.repeat(2 * 1024 * 1024) });
-    expect(response.status).toBe(413);
+    // The server answers 413 before reading the body; some kernels (macOS) then reset the client's
+    // still-writing socket. Either outcome means the body was refused.
+    const outcome = await rawRequest(session.endpoint.url, { headers: jsonHeaders(session), body: 'x'.repeat(2 * 1024 * 1024) })
+      .then(response => response.status, (error: NodeJS.ErrnoException) => error.code);
+    expect([413, 'ECONNRESET', 'EPIPE']).toContain(outcome);
   });
 });
 
