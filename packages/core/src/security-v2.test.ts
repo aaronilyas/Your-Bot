@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { AgentRunContextV2, AppSettingsV2, DesktopEventV2, GrantAuditEntry, PermissionRequestV2, PrincipalV2 } from '@your-bot/contracts';
 import { createGatewayV2, isWithin } from './index.js';
 import {
@@ -107,7 +107,7 @@ describe('standing grants', () => {
     await writeFile(join(ws, 'docs', 'a.txt'), 'a'); await writeFile(join(ws, 'docs-private', 'x.txt'), 'x'); await writeFile(join(ws, 'other', 's.txt'), 's');
     await symlink(join(ws, 'other', 's.txt'), join(ws, 'docs', 'link.txt'));
     await symlink(join(outside, 'secret.txt'), join(ws, 'docs', 'escape.txt'));
-    paths = ['docs/a.txt', 'docs-private/x.txt', join(ws, 'other', 's.txt'), 'docs/link.txt', 'docs/escape.txt', '../' + outside.split('/').pop() + '/secret.txt'];
+    paths = ['docs/a.txt', 'docs-private/x.txt', join(ws, 'other', 's.txt'), 'docs/link.txt', 'docs/escape.txt', '../' + basename(outside) + '/secret.txt'];
     const grant = await f.gateway.dispatch(cmd({ type: 'grant.create', grant: { botId: f.bot.id, capability: 'file.read', scope: { folder: join(ws, 'docs') } } }), owner); ok(grant);
     const prompted = responder(f, 'deny');
     const taskId = await send(f.gateway, f.sessionId);
@@ -190,10 +190,12 @@ describe('standing grants', () => {
   });
 
   it('audits standing, interactive and policy decisions, pages newest first, and hides audit events from v1 subscribers', async () => {
+    // An existing file outside the workspace (portable: /etc/hostname is not absolute-and-present on Windows).
+    const outside = await directory(); const outsideFile = join(outside, 'secret.txt'); await writeFile(outsideFile, 'outside');
     const f = await trustedFixture(async context => {
       await context.host!.readTextFile({ path: 'docs/a.txt' });
       await context.host!.readTextFile({ path: 'b.txt' });
-      await context.host!.readTextFile({ path: '/etc/hostname' }).catch(() => undefined);
+      await context.host!.readTextFile({ path: outsideFile }).catch(() => undefined);
     });
     await mkdir(join(f.workspace, 'docs')); await writeFile(join(f.workspace, 'docs', 'a.txt'), 'a'); await writeFile(join(f.workspace, 'b.txt'), 'b');
     ok(await f.gateway.dispatch(cmd({ type: 'grant.create', grant: { botId: f.bot.id, capability: 'file.read', scope: { folder: join(f.workspace, 'docs') } } }), owner));

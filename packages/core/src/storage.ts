@@ -27,6 +27,8 @@ export class Store {
       if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (process.getuid && directoryStat.uid !== process.getuid())) throw new GatewayError('UNSAFE_DATABASE', 'Database directory must be owned by the current user');
       chmodSync(directory, 0o700);
       this.path = resolve(realpathSync(directory), requested.slice(directory.length + 1));
+      // O_NOFOLLOW does not exist on Windows: refuse a symlinked database explicitly there.
+      if (process.platform === 'win32' && lstatSync(this.path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new GatewayError('UNSAFE_DATABASE', 'Database must be a private regular file');
       const fd = openSync(this.path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
       try {
         const info = fstatSync(fd);
