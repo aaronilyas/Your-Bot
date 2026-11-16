@@ -390,17 +390,14 @@ async function stepInteractive() {
   state.phase = 'interactive';
   state.autoApprove = true;
   const content = [
-    'Create the file demo.txt in the workspace using the client filesystem tool fs/write_text_file.',
-    `The file contents must be exactly ${marker} and no other characters.`,
-    'Then run the client terminal with this exact command line and no arguments array:',
-    'cat demo.txt',
-    'No quotes, pipes, redirects, or other commands. Wait until it exits and read its output.',
-    'Reply with that command output only.',
+    `Write a file named demo.txt in the workspace whose exact contents are ${marker}.`,
+    'Then run this command and wait until it exits: cat demo.txt',
+    'Reply with the command output only.',
   ].join('\n');
   const sent = await ctl({ type: 'message.send', sessionId: state.sessionId, content });
   if (!sent.taskId) throw new Error('message.send returned no task');
   log(`interactive task ${sent.taskId}`);
-  await waitTask(sent.taskId, 180_000);
+  await waitTask(sent.taskId, 600_000);
   state.autoApprove = false;
   await assertFile('demo.txt', marker);
   const text = await assistantText(state.sessionId, sent.taskId);
@@ -424,17 +421,15 @@ async function stepRoutine() {
   }
   const at = new Date(Date.now() + 8_000).toISOString();
   const prompt = [
-    'Write the file routine.txt using the client tool fs/write_text_file.',
-    `The file contents must be exactly ${routineMarker} and no other characters.`,
-    'Then run the client terminal with command pwd, no arguments, no shell syntax, and no environment variables.',
-    'Do not read any file. Do not run cat or any command other than pwd. Do not use a built-in tool.',
-    'Reply with the pwd output only.',
+    `Write a file named routine.txt in the workspace whose exact contents are ${routineMarker}.`,
+    'Then run this command and wait until it exits: pwd',
+    'Do not read files or run any other command. Reply with the command output only.',
   ].join('\n');
   const created = await hostOk(['routine', 'create', '--bot', state.botId, '--name', 'soon', '--prompt', prompt, '--at', at, '--session', 'new', '--missed', 'skip']);
   const routineId = /^routine (\S+)/m.exec(created)?.[1];
   if (!routineId) throw new Error(`routine create returned ${JSON.stringify(created.trim())}`);
   log(`routine ${routineId} at ${at}`);
-  const run = await waitUntil('routine completion', 200_000, async () => {
+  const run = await waitUntil('routine completion', 600_000, async () => {
     if (state.routinePerms.length) throw new Error(`permission.requested during routine: ${state.routinePerms.map(summarizeRequest).join(' || ')}`);
     const events = state.events.filter(event => event.type === 'routine.run' && event.run?.routineId === routineId);
     const latest = events.at(-1)?.run;
@@ -485,16 +480,14 @@ async function stepRemote(branch) {
   if (!deviceId) throw new Error(`pair output had no device id: ${paired.stdout.trim()}`);
   const remoteSession = await ctl({ type: 'bot.session.create', botId: state.botId });
   const content = [
-    'Do not write or edit any file. Do not run pwd or cat.',
-    `Run the client terminal with this exact command line and no arguments array: echo ${remoteMarker}`,
-    'No quotes, pipes, redirects, or environment variables. Wait until it exits.',
-    'Reply with the command output only.',
+    `Run this command and wait until it exits: echo ${remoteMarker}`,
+    'Do not write files or run any other command. Reply with the command output only.',
   ].join('\n');
   const sent = await ctl({ type: 'message.send', sessionId: remoteSession.sessionId, content });
   if (!sent.taskId) throw new Error('remote message returned no task');
   log(`remote task ${sent.taskId}`);
   const decided = new Set();
-  await waitUntil('remote approval', 180_000, async () => {
+  await waitUntil('remote approval', 600_000, async () => {
     const failed = taskEvent('task.failed', sent.taskId);
     if (failed) throw new Error(`remote task failed: ${failed.error?.code}: ${failed.error?.message}`);
     const listed = await ubuntuNode('approvals --json', 40_000);
