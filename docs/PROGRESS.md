@@ -100,7 +100,7 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
 
 ## Next
 - Optional: real Claude Code (`YOUR_BOT_REAL_AGENT=claude`) on Linux/Windows once Claude usage resets.
-- Review and merge the PR integration/grok-bot-parity → main.
+- Review and merge PR #1 (https://github.com/aaronilyas/Your-Bot/pull/1), integration/grok-bot-parity → main.
 
 ## Open decisions / owner actions
 - Claude account hit its 5-hour limit during wave 2 (resets 9:10pm ET); Antigravity quota exhausted
