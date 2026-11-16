@@ -88,7 +88,7 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
 1. Bots — core `v2.test.ts` (bots, sessions, migration, null patch), desktop `ui-v2.test.ts`. ✅
 2. Trusted profile — adapters `trusted.test.ts` (Linux + Windows), real Grok `real-agent.test.ts`,
    `tests/v2-runtime.test.ts` (real WorkspaceHost; Linux + Windows), workspace `*.test.ts`
-   (Linux + Windows), demo. ✅ Linux/Windows; **macOS unverified (macmini locked)**.
+   (Linux + Windows), demo. ✅ Linux, Windows and macOS (342 passed on Darwin arm64 at c2d75b2).
 3. Standing permissions — core `security-v2.test.ts`, `security-shell-grants.test.ts`, demo routine. ✅
 4. Continuity — adapters `trusted.test.ts` (session/load), core `continuity.test.ts`. ✅
 5. Routines — core `schedule.test.ts`, `security-continuity.test.ts` (blocked waits, interrupted),
@@ -99,15 +99,11 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
 8. Skills + encrypted keys — skills/secrets tests, core secrets-at-rest tests. ✅
 
 ## Next
-- Owner: unlock `macmini`, then run the trusted suites there (portable Node in a temp dir;
-  `npx vitest run packages/workspace packages/adapters packages/runtime tests/v2-runtime.test.ts`).
 - Optional: real Claude Code (`YOUR_BOT_REAL_AGENT=claude`) on Linux/Windows once Claude usage resets.
 - Review and merge the PR integration/grok-bot-parity → main.
 
 ## Open decisions / owner actions
 - Claude account hit its 5-hour limit during wave 2 (resets 9:10pm ET); Antigravity quota exhausted
   (~6 days). Only Grok remains; both continuations (P4, P8) run there.
-- `macmini` is locked (SSH refused until unlocked locally). macOS trusted-profile validation
-  needs the owner to unlock it.
 - `ubuntu` SSH alias is Arch (Omarchy), not Ubuntu; strict/security suites run in an Ubuntu
   26.04 container instead (decision taken by lead; matches the previously validated env).

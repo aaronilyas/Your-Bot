@@ -2,14 +2,15 @@
 
 ## v2 (Grok Bot parity), November 15, 2026
 
-Hosts: workstation `omarchy` (Arch-based Omarchy, x86_64, Node 26.12, bubblewrap 0.13.1, Grok Build 1.0.77); `ubuntu` SSH host (also Arch-based, x86_64, Node 26); `windows` (Windows 11 x64, portable Node 22.23.5 in %TEMP%); Ubuntu 26.04 container (Node 22.23.5) for strict/security suites. `macmini` (macOS) was locked and unreachable: **macOS is not validated**.
+Hosts: workstation `omarchy` (Arch-based Omarchy, x86_64, Node 26.12, bubblewrap 0.13.1, Grok Build 1.0.77); `ubuntu` SSH host (also Arch-based, x86_64, Node 26); `windows` (Windows 11 x64, portable Node 22.23.5 in %TEMP%); Ubuntu 26.04 container (Node 22.23.5) for strict/security suites; `macmini` (macOS 27.2.1, Apple silicon arm64, portable Node 22.23.5 in $TMPDIR).
 
 | Check | Outcome |
 | --- | --- |
 | `npm run build`, `npm run typecheck` | Pass (all 12 workspaces incl. runtime and `apps/host`) |
-| `npm run test:linux` (Ubuntu 26.04, `--network none`) at 370e1a7 | All steps pass: vitest **466 passed** / 3 opt-in skips; `test:security` **201 passed**; `test:integration` **5 passed** (incl. real contained ACP) |
+| `npm run test:linux` (Ubuntu 26.04, `--network none`) at 1eb55f4 | All steps pass: vitest **466 passed** / 3 opt-in skips; `test:security` **201 passed**; `test:integration` **5 passed** (incl. real contained ACP) |
 | `npx vitest run` on the Arch workstation | All pass except the 10 strict bubblewrap/contained-ACP tests, which fail closed with `CONTAINMENT_UNAVAILABLE` because the strict launcher supports only the Debian/Ubuntu multiarch layout (unchanged v1 behaviour) |
 | Windows: workspace, adapters, mcp, remote, runtime, core, secrets, skills, `tests/v2-runtime.test.ts` at 85a7d7a | **339 passed**, 15 skipped (12 Linux-only bubblewrap, 3 opt-in) |
+| macOS: same package set plus `tests/v2-control.test.ts` at c2d75b2 | **342 passed**, 15 skipped (Linux-only bubblewrap, opt-in) |
 | `npm run package` + `npm run test:desktop` | Pass: packaged entrypoint window, v2 renderer/preload/IPC, approval dialog, real Python 42, cancellation, shutdown cleanup, restart restore |
 | `YOUR_BOT_REAL_AGENT=grok` adapter and runtime tests | Pass: real Grok Build edits a file and runs a command through core-mediated `fs/*`/`terminal/*` |
 | `YOUR_BOT_BROWSER_TEST=1` | Pass: Playwright MCP through the authenticated proxy reads a local page title |
@@ -26,11 +27,11 @@ One unattended run against the real Grok Build CLI and a second machine:
 5. `ubuntu` clones the branch into `/tmp`, `your-bot-remote pair <code>`, finds the pending approval for a command outside the grants and approves it; audit `decidedBy device:<id>`. After `your-bot-host revoke`, the device's approvals call is rejected.
 6. Teardown on both machines.
 
-Fixes found by end-to-end runs (all with tests): ESM main bundle missing `require` for bundled `ws` (packaged app could not start); 10-minute default agent turn budget (`your-bot-host run --agent-timeout`); Grok's login-shell command lines with presentation-only env could never match standing grants (inert-env allowlist shared via contracts; POSIX single quotes; never on Windows); Windows could not open a file-backed gateway (POSIX mode check) and lacked `O_NOFOLLOW` (explicit symlink refusal).
+Fixes found by end-to-end runs (all with tests): ESM main bundle missing `require` for bundled `ws` (packaged app could not start); 10-minute default agent turn budget (`your-bot-host run --agent-timeout`); Grok's login-shell command lines with presentation-only env could never match standing grants (inert-env allowlist shared via contracts; POSIX single quotes; never on Windows); Windows could not open a file-backed gateway (POSIX mode check) and lacked `O_NOFOLLOW` (explicit symlink refusal); macOS test portability (`/var` → `/private/var` canonical temp dirs, socket reset on refused oversized bodies).
 
 ### Unverified / limits
 
-macOS (locked host); real Claude Code / Codex / Gemini CLI agents (only Grok Build was exercised; Claude usage was exhausted during the run); real LM Studio/llama.cpp (as in v1). Ubuntu's patched pip wheel cannot run in the offline strict sandbox (`/etc/ssl/certs` absent), so `test:linux` installs upstream pip 25.3. See [security](security.md) for trusted-profile and standing-grant caveats.
+Strict-profile containment on macOS/Windows (out of scope; fails closed); real Claude Code / Codex / Gemini CLI agents (only Grok Build was exercised; Claude usage was exhausted during the run); real LM Studio/llama.cpp (as in v1). Ubuntu's patched pip wheel cannot run in the offline strict sandbox (`/etc/ssl/certs` absent), so `test:linux` installs upstream pip 25.3. See [security](security.md) for trusted-profile and standing-grant caveats.
 
 ## v1 baseline, October 9, 2026
 
