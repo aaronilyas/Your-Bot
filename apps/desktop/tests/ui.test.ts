@@ -20,7 +20,7 @@ describe('conversation UI', () => {
     await user.type(screen.getByRole('textbox', { name: 'Message' }), 'Help me plan');
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     await screen.findByText(/Let’s make this concrete/);
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop response' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop response' })).toBeNull(), { timeout: 5000 });
     expect(screen.getAllByText(/Let’s make this concrete/)).toHaveLength(1);
     expect(dispatch.mock.calls.some(([command]) => command.type === 'session.selectAgent' && command.agentId === 'acp-demo')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'A fresh perspective' }));

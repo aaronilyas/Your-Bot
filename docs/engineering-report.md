@@ -30,3 +30,23 @@ Build, strict typecheck, all 160 tests, explicit integration/security suites, Li
 Production dependency audit reported zero advisories. The full development audit reported seven moderate dependency-path findings from the packaging tool's optional `sprintf-js` chain, with no nonbreaking fix reported. No force downgrade or suppression was applied. History retention, cgroup RSS limits, native/source Python packages, network mediation for ACP harnesses, and platform-equivalent sandboxes remain future work.
 
 All reviewed feature heads are retained as branches. The final response records the main merge commit and remote verification result; `git log --first-parent main` identifies the integration and delivery commits. Delivery uses a normal non-force push after checking the configured origin and newer remote commits.
+
+## v2: Grok Bot parity (November 2026)
+
+The lead wrote the additive v2 contract, package skeletons and plan ([docs/v2/PLAN.md](v2/PLAN.md)), then delegated one work package per worktree branch through T3 Code and integrated each after tests and a targeted diff review. Providers were rotated as usage limits hit (Claude 5-hour limit, Antigravity quota); work interrupted by OOM kills or limits was committed as WIP and resumed.
+
+| Package | Branch | Delivered | Built by |
+| --- | --- | --- | --- |
+| P0 | `feature/p0-linux-container` | Ubuntu 26.04 container runner (`test:linux`) | Claude Sonnet 5.5 |
+| P1 | `feature/p1-core-v2` | v1+v2 gateway, owner model, bots, profiles, one authorization pipeline, standing grants, audit, host channel, secrets at rest | Claude Opus 5.5 |
+| P2 | `feature/p2-trusted-acp` | Host-launched trusted ACP, fs/terminal/permission mediation, session/load continuity, MCP pass-through | Grok 4.7 |
+| P3 | `feature/p3-workspace-host` | Cross-platform confined WorkspaceHost | Claude Sonnet 5.5 |
+| P4 | `feature/p4-continuity-routines` | Memory, instructions, compaction, routines, notifications | Claude Opus 5.5 → Antigravity → Grok 4.7 |
+| P5 | `feature/p5-mcp` | MCP broker, authenticated loopback proxy, browser preset | Claude Sonnet 5.5 |
+| P6 | `feature/p6-remote` | TLS WSS host, pairing, device auth/revocation, multi-host client, CLI | Claude Opus 5.5 |
+| P7 | `feature/p7-skills-secrets` | Skill catalog, AES-GCM and safeStorage ciphers | Gemini 3.8 Flash |
+| P8 | `feature/p8-runtime-host` | Shared runtime, desktop on v2, `your-bot-host` + control channel | Claude Opus 5.5 → Grok 4.7 |
+| P9 | `feature/p9-desktop-v2` | Desktop UI/IPC on v2 | Claude Sonnet 5.5 |
+| P10 | `feature/p10-demo` | Scripted two-machine demo | Grok 4.7 |
+
+Lead cross-package fixes: shell-line execution and grant matching for agent terminal requests; nullable bot patches; v2 integration test wiring; container `--init`; packaged ESM `require`; agent turn budget; inert-env and quoting rules for standing command grants; Windows database opening. See [validation](validation.md) and [progress](PROGRESS.md).

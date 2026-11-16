@@ -1,17 +1,23 @@
 import { isAbsolute } from 'node:path';
-import type { AgentAdapter, AgentInfo, AgentRunContext, ModelInfo, ProviderConfig } from '@your-bot/contracts';
+import type { AgentAdapter, AgentInfo, AgentRunContext, AgentRunContextV2, ExecutionProfile, ModelInfo, ProviderConfig } from '@your-bot/contracts';
 import { modelSelector } from './acp-models.js';
+import { runTrustedAcp } from './acp-trusted.js';
 import type { ContainedHarness, ContainmentLauncher } from './containment.js';
 import { AdapterError, normalizeAdapterError, positiveInteger, record } from './errors.js';
+import type { HostLauncher } from './host-launcher.js';
 import { abortable, RunManager, throwIfAborted } from './lifecycle.js';
 import { InvalidParams, MethodNotFound, StdioRpc } from './rpc.js';
 import { parseToolInvocation } from './tools.js';
 
 export interface AcpAdapterOptions {
-  /** Trusted host injection; without it, ACP fails closed and no process is spawned. */
+  /** Trusted host injection; without it, strict ACP fails closed and no process is spawned. */
   containment?: ContainmentLauncher;
-  /** Backward-compatible alias; supplying both is rejected. */
+  /** Backward-compatible alias; supplying both containment and launcher is rejected. */
   launcher?: ContainmentLauncher;
+  /** Uncontained installed-agent launch. Mutually exclusive with containment. Serves only `trusted`. */
+  host?: HostLauncher;
+  /** Extra host environment names copied into a host-launched agent. */
+  envPassthrough?: readonly string[];
   timeoutMs?: number;
   shutdownTimeoutMs?: number;
   maxMessageBytes?: number;
@@ -23,8 +29,12 @@ const STOP_REASONS = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 're
 
 export class AcpAdapter implements AgentAdapter {
   readonly id: string;
+  /** `strict` for containment, `trusted` for an uncontained host launcher. */
+  readonly profiles: readonly ExecutionProfile[];
   private readonly config: ProviderConfig;
   private readonly launcher?: ContainmentLauncher;
+  private readonly hostLauncher?: HostLauncher;
+  private readonly envPassthrough: readonly string[];
   private readonly runs: RunManager;
   private readonly shutdownMs: number;
   private readonly maxMessageBytes: number;
@@ -37,7 +47,14 @@ export class AcpAdapter implements AgentAdapter {
     this.config = { ...config, args: config.args ? [...config.args] : undefined };
     this.id = config.id;
     if (options.containment && options.launcher) throw new AdapterError('INVALID_CONFIG', 'Specify one ACP containment launcher.');
-    this.launcher = options.containment ?? options.launcher;
+    if ((options.containment || options.launcher) && options.host) throw new AdapterError('INVALID_CONFIG', 'Specify either ACP containment or a host launcher.');
+    if (options.envPassthrough?.some(name => typeof name !== 'string' || !name || name.includes('=') || name.includes('\0'))) {
+      throw new AdapterError('INVALID_CONFIG', 'envPassthrough names are invalid.');
+    }
+    this.hostLauncher = options.host;
+    this.launcher = this.hostLauncher ? undefined : options.containment ?? options.launcher;
+    this.profiles = this.hostLauncher ? ['trusted'] : ['strict'];
+    this.envPassthrough = [...(options.envPassthrough ?? [])];
     this.runs = new RunManager(positiveInteger(options.timeoutMs ?? 120_000, 'timeoutMs'));
     this.shutdownMs = positiveInteger(options.shutdownTimeoutMs ?? 5_000, 'shutdownTimeoutMs');
     this.maxMessageBytes = positiveInteger(options.maxMessageBytes ?? 1_048_576, 'maxMessageBytes');
@@ -48,7 +65,10 @@ export class AcpAdapter implements AgentAdapter {
 
   async getInfo(): Promise<AgentInfo> {
     this.runs.assertOpen();
-    const limitation = !this.config.enabled ? 'Provider is disabled.' : !this.launcher ? 'ACP requires an enforced OS containment launcher.' : !this.config.command ? 'ACP command is missing.' : undefined;
+    const limitation = !this.config.enabled ? 'Provider is disabled.'
+      : this.hostLauncher ? (!this.config.command ? 'ACP command is missing.' : undefined)
+      : !this.launcher ? 'ACP requires an enforced OS containment launcher.'
+      : !this.config.command ? 'ACP command is missing.' : undefined;
     return {
       id: this.id, name: this.config.name, kind: 'acp', available: !limitation,
       models: this.models.map(model => ({ ...model })),
@@ -64,7 +84,16 @@ export class AcpAdapter implements AgentAdapter {
     finally { clearTimeout(timer); }
   }
 
-  async run(context: AgentRunContext): Promise<void> {
+  async run(context: AgentRunContext | AgentRunContextV2): Promise<void> {
+    if (this.hostLauncher) {
+      return runTrustedAcp({
+        enabled: this.config.enabled, command: this.config.command ?? '', args: this.config.args ?? [],
+        envPassthrough: this.envPassthrough, host: this.hostLauncher, runs: this.runs, shutdownMs: this.shutdownMs,
+        maxMessageBytes: this.maxMessageBytes, maxOutputBytes: this.maxOutputBytes, maxToolCalls: this.maxToolCalls,
+        modelId: this.config.modelId, getModels: () => this.models, setModels: models => { this.models = models; },
+      }, context);
+    }
+    if ((context as { profile?: unknown }).profile === 'trusted') throw new AdapterError('PROFILE_UNSUPPORTED', 'Contained ACP cannot serve a trusted run.');
     if (!this.config.enabled) throw new AdapterError('DISABLED', 'Provider is disabled.');
     if (!this.launcher) throw new AdapterError('CONTAINMENT_UNAVAILABLE', 'ACP requires an enforced OS containment launcher.');
     if (!this.config.command) throw new AdapterError('INVALID_CONFIG', 'ACP command is missing.');
@@ -123,7 +152,7 @@ export class AcpAdapter implements AgentAdapter {
           const plan = harness?.preparePermission
             ? await abortable(harness.preparePermission(call, scope.signal), scope.signal) : undefined;
           if (plan && allow) {
-            const decision = await abortable(context.requestPermission(plan.request), scope.signal);
+            const decision = await scope.excludeTimeout(abortable(context.requestPermission(plan.request), scope.signal));
             throwIfAborted(scope.signal);
             if (decision.outcome === 'allow' && await abortable(plan.allowOnce(scope.signal), scope.signal)) {
               throwIfAborted(scope.signal);

@@ -41,7 +41,7 @@ export function validatePackages(value: unknown): asserts value is string[] {
   for (const pkg of value) assert(typeof pkg === 'string' && pkg.length <= 256 && /^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:\[[a-zA-Z0-9,._-]+\])?(?:==[a-zA-Z0-9][a-zA-Z0-9.*+!_-]*)?$/.test(pkg), 'Only package names or == version pins are supported');
   assert(new Set(value).size === value.length, 'Duplicate packages');
 }
-function validateJson(value: unknown, depth = 0, seen = new Set<object>()): asserts value is JsonValue {
+export function validateJson(value: unknown, depth = 0, seen = new Set<object>()): asserts value is JsonValue {
   assert(depth <= 40, 'JSON nesting too deep');
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return;
   if (typeof value === 'number') { assert(Number.isFinite(value), 'Invalid JSON number'); return; }

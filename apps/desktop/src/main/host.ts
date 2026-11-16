@@ -1,17 +1,18 @@
-import { app, BrowserWindow, ipcMain, Menu, session, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, type IpcMainInvokeEvent } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { DesktopGateway, Principal, CommandResult } from '@your-bot/contracts';
+import type { AnyCommandResult, DesktopGateway, DesktopGatewayV2, OwnerNotification, PrincipalV2 } from '@your-bot/contracts';
 import { IPC } from '../shared/ipc';
-import { parseCommand, trustedRendererURL, validateDevelopmentURL, rendererCSP, redactResult, rendererEvent } from './security';
+import { parseAnyCommand, trustedRendererURL, validateDevelopmentURL, rendererCSP, redactResult, rendererEvent } from './security';
 export interface GatewayFactoryContext {
   /** Host-authenticated local identity. Never supplied by the renderer. */
-  readonly principal: Principal;
+  readonly principal: PrincipalV2;
   /** Host storage directory; factory owns storage and credential protection. */
   readonly userDataPath: string;
 }
-export type GatewayFactory = (context: GatewayFactoryContext) => DesktopGateway | Promise<DesktopGateway>;
+/** A v1 gateway is accepted for compatibility; v2 commands then fail inside it with its own validation error. */
+export type GatewayFactory = (context: GatewayFactoryContext) => DesktopGatewayV2 | DesktopGateway | Promise<DesktopGatewayV2 | DesktopGateway>;
 export interface DesktopHostOptions {
   gatewayFactory: GatewayFactory;
   /** Stable host-authenticated identity across restarts. Defaults to local-owner. */
@@ -23,7 +24,7 @@ export interface DesktopHostOptions {
 }
 export interface DesktopHost {
   readonly window: BrowserWindow;
-  readonly principal: Principal;
+  readonly principal: PrincipalV2;
   close(): Promise<void>;
 }
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,16 @@ export const SECURE_WEB_PREFERENCES = Object.freeze({
   contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true,
   allowRunningInsecureContent: false, webviewTag: false,
 });
+const printable = (value: unknown, max: number): string => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
+/** Native OS notification for the owner while the window is not focused. Text is length-bounded and control-stripped. */
+function notifyOwner(window: BrowserWindow, notification: OwnerNotification): void {
+  try {
+    if (window.isFocused() || !Notification.isSupported()) return;
+    const native = new Notification({ title: printable(notification.title, 120) || 'Your Bot', body: printable(notification.body, 300) });
+    native.on('click', () => { if (window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); });
+    native.show();
+  } catch { /* A notification failure must never disturb event delivery. */ }
+}
 /** Call once per Electron process. Parent supplies core/adapters through the factory. */
 export async function createDesktopHost(options: DesktopHostOptions): Promise<DesktopHost> {
   await app.whenReady();
@@ -38,9 +49,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const developmentURL = options.developmentURL ? validateDevelopmentURL(options.developmentURL) : undefined;
   const rendererFile = resolve(options.rendererFile ?? resolve(moduleDirectory, '../renderer/index.html'));
   const expectedURL = developmentURL ?? pathToFileURL(rendererFile).href;
-  const principal = Object.freeze<Principal>({ id: options.principalId ?? 'local-owner', kind: 'local', capabilities: ['conversation', 'settings', 'tool.execute', 'file.read', 'file.write', 'file.delete', 'library.install', 'network', 'process.spawn'] });
+  const principal = Object.freeze<PrincipalV2>({ id: options.principalId ?? 'local-owner', kind: 'local', capabilities: ['conversation', 'settings', 'tool.execute', 'file.read', 'file.write', 'file.delete', 'library.install', 'network', 'process.spawn', 'mcp.call'] });
   Object.freeze(principal.capabilities);
-  const gateway = await options.gatewayFactory({ principal, userDataPath: app.getPath('userData') });
+  // The core gateway implements both contracts; v1 commands stay valid and v2 is selected per command.
+  const gateway = await options.gatewayFactory({ principal, userDataPath: app.getPath('userData') }) as unknown as DesktopGatewayV2;
   // Dedicated ephemeral Chromium session: no inherited browser cookies or permissions.
   const browserSession = session.fromPartition(`your-bot-${randomUUID()}`);
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -74,13 +86,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   const trusted = (event: IpcMainInvokeEvent) => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && trustedRendererURL(event.senderFrame.url, expectedURL);
   let closed = false;
-  const pending = new Set<Promise<CommandResult>>();
-  ipcMain.handle(IPC.dispatch, async (event, value: unknown): Promise<CommandResult> => {
+  const pending = new Set<Promise<AnyCommandResult>>();
+  ipcMain.handle(IPC.dispatch, async (event, value: unknown): Promise<AnyCommandResult> => {
     if (!trusted(event)) throw new Error('Untrusted IPC sender');
     const fallbackId = typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string' ? value.id.slice(0, 256) : 'invalid';
     if (closed) return { ok: false, commandId: fallbackId, error: { code: 'DISCONNECTED', message: 'The desktop host is closed', retryable: true } };
     let command;
-    try { command = parseCommand(value); } catch { return { ok: false, commandId: fallbackId, error: { code: 'INVALID_COMMAND', message: 'Command does not match contract v1' } }; }
+    try { command = parseAnyCommand(value); } catch { return { ok: false, commandId: fallbackId, error: { code: 'INVALID_COMMAND', message: 'Command does not match contract v1 or v2' } }; }
     // Bound renderer-driven work without weakening gateway command deduplication.
     if (pending.size >= 64) return { ok: false, commandId: command.id, error: { code: 'BUSY', message: 'Too many pending commands', retryable: true } };
     const operation = Promise.resolve().then(() => gateway.dispatch(command, principal));
@@ -88,6 +100,19 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     try { return redactResult(await operation); }
     catch { return { ok: false, commandId: command.id, error: { code: 'BACKEND_ERROR', message: 'The backend could not complete this command', retryable: true } }; }
     finally { pending.delete(operation); }
+  });
+  // The only host capability beyond dispatch/subscribe: a native folder picker that returns a path string.
+  // The renderer cannot pass options; the path is only ever sent back as an ordinary (validated) bot command.
+  let choosing = false;
+  ipcMain.handle(IPC.chooseDirectory, async (event): Promise<string | undefined> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    if (closed || choosing || window.isDestroyed()) return undefined;
+    choosing = true;
+    try {
+      const result = await dialog.showOpenDialog(window, { title: 'Choose a workspace folder', properties: ['openDirectory'] });
+      const chosen = result.canceled ? undefined : result.filePaths[0];
+      return typeof chosen === 'string' && chosen.length > 0 && chosen.length <= 4096 ? chosen : undefined;
+    } finally { choosing = false; }
   });
   let unsubscribe = () => {};
   let closing: Promise<void> | undefined;
@@ -97,6 +122,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     // Assign before destroy() can synchronously emit the closed event.
     closing = Promise.resolve().then(async () => {
       ipcMain.removeHandler(IPC.dispatch);
+      ipcMain.removeHandler(IPC.chooseDirectory);
       unsubscribe();
       if (!window.isDestroyed()) window.destroy();
       await gateway.close();
@@ -116,8 +142,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   try {
     unsubscribe = gateway.subscribe(event => {
       const safe = rendererEvent(event, principal);
-      if (safe && !closed && !window.isDestroyed() && trustedRendererURL(window.webContents.getURL(), expectedURL)) window.webContents.send(IPC.event, safe);
-    }, principal);
+      if (!safe || closed || window.isDestroyed()) return;
+      if (safe.type === 'notification') notifyOwner(window, safe.notification);
+      if (trustedRendererURL(window.webContents.getURL(), expectedURL)) window.webContents.send(IPC.event, safe);
+    }, principal, { contractVersion: 2 });
     await window.loadURL(expectedURL);
   }
   catch (error) { await close(); throw error; }

@@ -24,4 +24,5 @@ while [ "$attempt" -lt 100 ]; do
   sleep 0.1
 done
 echo 'Packaged application did not display its window' >&2
+cat /tmp/packaged-startup.log >&2 || true
 exit 1

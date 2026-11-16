@@ -103,3 +103,4 @@ export interface AgentAdapter {
   cancel(taskId: TaskId): Promise<void>;
   close(): Promise<void>;
 }
+export * from './v2.js';

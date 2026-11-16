@@ -24,3 +24,28 @@ export function modelSelector(raw: unknown): AcpModelSelector | undefined {
   });
   return { id: option.id, current: option.currentValue, models };
 }
+
+/**
+ * ACP "session models" shape (reported on session/new and session/load results by agents such as
+ * Grok Build): `models: {currentModelId, availableModels: [{modelId, name}]}`, switched with
+ * `session/set_model {sessionId, modelId}`.
+ */
+export interface AcpSessionModels { current: string; models: ModelInfo[]; }
+
+export function sessionModels(raw: unknown): AcpSessionModels | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const value = record(raw);
+  if (typeof value.currentModelId !== 'string' || !value.currentModelId || !Array.isArray(value.availableModels)) {
+    throw new AdapterError('INVALID_RESPONSE', 'Harness returned invalid session models.');
+  }
+  const seen = new Set<string>();
+  const models = value.availableModels.map(item => {
+    const model = record(item);
+    if (typeof model.modelId !== 'string' || !model.modelId || seen.has(model.modelId) || typeof model.name !== 'string') {
+      throw new AdapterError('INVALID_RESPONSE', 'Harness returned invalid session models.');
+    }
+    seen.add(model.modelId);
+    return { id: model.modelId, name: model.name };
+  });
+  return { current: value.currentModelId, models };
+}

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentInfo, AgentRunContext, ModelInfo, ProviderConfig } from '@your-bot/contracts';
+import type { AgentAdapter, AgentInfo, AgentRunContext, AgentRunContextV2, ModelInfo, ProviderConfig, SessionV2 } from '@your-bot/contracts';
 import { AdapterError, normalizeAdapterError, positiveInteger, record } from './errors.js';
 import { abortable, RunManager, throwIfAborted } from './lifecycle.js';
 import { parseSse } from './sse.js';
@@ -18,6 +18,16 @@ export interface LocalAdapterOptions {
 interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string }; }
 interface WireMessage { role: string; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string; }
 interface Round { content: string; calls: ToolCall[]; }
+
+/** v2 run context fields (core-composed instructions, compaction summary) delivered as system messages. */
+function systemMessages(context: AgentRunContext | AgentRunContextV2): WireMessage[] {
+  const v2 = context as Partial<AgentRunContextV2>;
+  const parts: string[] = [];
+  if (typeof v2.instructions === 'string' && v2.instructions.trim()) parts.push(v2.instructions);
+  const summary = (v2.session as SessionV2 | undefined)?.summary;
+  if (typeof summary === 'string' && summary.trim()) parts.push(`Earlier conversation summary:\n${summary}`);
+  return parts.length ? [{ role: 'system', content: parts.join('\n\n') }] : [];
+}
 
 export class OpenAICompatibleAdapter implements AgentAdapter {
   readonly id: string;
@@ -204,10 +214,13 @@ export class OpenAICompatibleAdapter implements AgentAdapter {
       const model = context.session.modelId ?? this.config.modelId ?? (await this.discover(scope.signal))[0]?.id;
       if (!model) throw new AdapterError('NO_MODEL', 'Provider has no loaded models.');
       // Contract v1 does not persist tool_call_id. Historical tools are plain transcript context.
-      const messages: WireMessage[] = context.session.messages.map(message => ({
-        role: message.role === 'tool' ? 'user' : message.role,
-        content: message.role === 'tool' ? `[Prior tool result]\n${message.content}` : message.content,
-      }));
+      const messages: WireMessage[] = [
+        ...systemMessages(context),
+        ...context.session.messages.map(message => ({
+          role: message.role === 'tool' ? 'user' : message.role,
+          content: message.role === 'tool' ? `[Prior tool result]\n${message.content}` : message.content,
+        })),
+      ];
       const seenIds = new Set<string>();
       for (let round = 0; ; round++) {
         const response = await this.round(model, messages, context, scope.signal);
