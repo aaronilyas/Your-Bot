@@ -16,7 +16,7 @@ export interface CliIO {
 
 const USAGE = `Usage: your-bot-host [--data <dir>] <command>
   init [--name <name>]
-  run [--listen <host:port>] [--name <name>]
+  run [--listen <host:port>] [--name <name>] [--agent-timeout <seconds>]
   ctl '<json v2 command>'
   pair [--name <device>]
   devices
@@ -34,7 +34,7 @@ run stays in the foreground and opens the owner control socket. A remote listene
 The control token is read from <data>/control.token and sent as the first frame; it is never accepted as an argument.`;
 
 const VALUE_FLAGS = new Set([
-  'data', 'listen', 'name', 'agent', 'workspace', 'profile', 'instructions', 'model', 'bot', 'capability',
+  'data', 'listen', 'name', 'agent-timeout', 'agent', 'workspace', 'profile', 'instructions', 'model', 'bot', 'capability',
   'folder', 'mcp-server', 'mcp-tool', 'agent-tool-kind', 'expires', 'prompt', 'every', 'cron', 'timezone',
   'at', 'missed', 'session', 'max-catch-up', 'scope',
 ]);
@@ -181,11 +181,14 @@ async function runCommand(args: Parsed, rest: string[], io: CliIO): Promise<numb
   const requested = dataDirOf(args, io.env);
   await requireToken(requested);
   const listen = flag(args, 'listen');
+  const agentTimeout = flag(args, 'agent-timeout');
+  if (agentTimeout !== undefined && !/^[1-9][0-9]{0,6}$/.test(agentTimeout)) throw new UsageError('--agent-timeout must be a positive number of seconds');
   const notifier: Notifier = { notify: notification => io.stderr(`notification ${notification.title}: ${notification.body}`) };
   const runtime = await createRuntime({
     dataDir: requested,
     ...(flag(args, 'name') ? { hostName: flag(args, 'name') } : {}),
     ...(listen ? { listen: parseListen(listen) } : {}),
+    ...(agentTimeout ? { acpTimeoutMs: Number(agentTimeout) * 1000 } : {}),
     notifier,
   });
   try {

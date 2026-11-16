@@ -24,6 +24,8 @@ export interface RuntimeClock {
 }
 
 
+export const DEFAULT_ACP_TIMEOUT_MS = 600_000;
+
 export interface RuntimeListen { host: string; port: number; }
 
 export interface RuntimeOptions {
@@ -43,7 +45,9 @@ export interface RuntimeOptions {
   routineCapabilities?: CapabilityV2[];
   /** When set, listen for paired devices. Omit to leave the remote host disabled. */
   listen?: RuntimeListen;
-  /** Host-launched and contained ACP turn timeout. */
+  /** ACP agent turn budget, excluding time spent awaiting approvals/host calls. Default 10 minutes:
+   *  real agent CLIs routinely think longer than the adapter's 120 s default. Strict harnesses also keep
+   *  their containment launcher's own wall deadline. */
   acpTimeoutMs?: number;
   cleanupTimeoutMs?: number;
 }
@@ -124,7 +128,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     secretCipher,
     host: layout.host,
     skillCatalog,
-    onSettingsChanged: settings => createAdapters(settings.providers, adapterOptions(settings, options.acpTimeoutMs)),
+    onSettingsChanged: settings => createAdapters(settings.providers, adapterOptions(settings, options.acpTimeoutMs ?? DEFAULT_ACP_TIMEOUT_MS)),
     cleanupTimeoutMs: options.cleanupTimeoutMs ?? 5000,
     ...(devices ? { devices } : {}),
     ...(options.notifier ? { notifier: options.notifier } : {}),
