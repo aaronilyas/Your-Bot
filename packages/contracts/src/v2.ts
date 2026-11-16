@@ -520,5 +520,21 @@ export interface SkillCatalog {
 
 export interface Notifier { notify(notification: OwnerNotification): void; }
 
+/* ------------------------------------------------- shared policy helpers */
+
+/**
+ * Environment entries agents set for presentation only (colour, progress, CI mode, terminal size,
+ * agent session id). They cannot change which program runs or what it loads, so they do not stop a
+ * standing grant from matching. Anything else (PATH, LD_*, NODE_OPTIONS, *_OPTS, ...) does — except
+ * the two exact console-style values Grok Build sets for Gradle and Maven.
+ */
+const INERT_ENV_NAMES = new Set(['TERM', 'COLORTERM', 'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE', 'NO_COLOR', 'CI', 'COLUMNS', 'LINES',
+  'PIP_PROGRESS_BAR', 'NPM_CONFIG_PROGRESS', 'CARGO_TERM_COLOR', 'CARGO_TERM_PROGRESS_WHEN', 'CARGO_TERM_PROGRESS_WIDTH', 'GROK_SESSION_ID']);
+const INERT_ENV_VALUES: Record<string, string> = { GRADLE_OPTS: '-Dorg.gradle.console=rich', MAVEN_OPTS: '-Dstyle.color=always' };
+export function inertEnvironment(entry: { name: string; value: string }): boolean {
+  if (/[\0\n\r]/.test(entry.value)) return false;
+  return INERT_ENV_NAMES.has(entry.name) || INERT_ENV_VALUES[entry.name] === entry.value;
+}
+
 /** File scope helper re-export for package convenience. */
 export type { FileScope };

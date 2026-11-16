@@ -1,11 +1,12 @@
 import type { PermissionInputV2, TerminalExitStatus, TerminalOutput, WorkspaceHost, WorkspaceHostChannel } from '@your-bot/contracts';
 import { lstat } from 'node:fs/promises';
 import { isDatabasePath, isWithin } from './paths.js';
+import { inertEnvironment } from './grants.js';
 import { GatewayError, record, string } from './validation.js';
 import { validateHostRead, validateHostWrite, validateTerminalCreate, validateTerminalId } from './validation-v2.js';
 
 export type HostPermission = PermissionInputV2 & {
-  /** Terminal requests that set environment variables never match standing grants. */
+  /** Terminal requests that set any non-inert environment variable never match standing grants. */
   env?: boolean;
 };
 export interface HostChannelDependencies {
@@ -89,11 +90,10 @@ export function createHostChannel(deps: HostChannelDependencies): WorkspaceHostC
       const args = input.args ?? [];
       const env = input.env ?? [];
       const spawn = (cwd: string): HostPermission => ({
-        capability: 'process.spawn', botId: deps.botId, command: { command: input.command, args, cwd },
+        capability: 'process.spawn', botId: deps.botId, command: { command: input.command, args, cwd, ...(env.length ? { env: env.map(entry => ({ ...entry })) } : {}) },
         reason: `Agent runs ${JSON.stringify([input.command, ...args])} in ${cwd}${env.length ? `\nEnvironment: ${env.map(entry => `${entry.name}=${entry.value}`).join('\n')}` : ''}`,
-        ...(env.length ? { env: true } : {}),
+        ...(env.some(entry => !inertEnvironment(entry)) ? { env: true } : {}),
       });
-      // `env` is not part of the contract's command detail; it is reflected in the reason only.
       const cwd = await resolve(input.cwd ?? deps.workspace, spawn);
       await allow(spawn(cwd));
       const terminalId = await deps.host.createTerminal(deps.workspace, { ...input, cwd }, { taskId: deps.taskId, signal: deps.signal });

@@ -419,8 +419,10 @@ async function stepRoutine() {
   state.autoApprove = false;
   state.routinePerms = [];
   await hostOk(['grant', 'create', '--bot', state.botId, '--capability', 'file.write', '--folder', state.workspace]);
-  for (const prefix of ['pwd', '/bin/pwd', '/usr/bin/pwd']) {
-    await hostOk(['grant', 'create', '--bot', state.botId, '--capability', 'process.spawn', '--folder', state.workspace, '--prefix', prefix]);
+  // Agents differ in how they shape terminal requests: plain argv, or (Grok Build) a login-shell
+  // line `/usr/bin/bash -lc pwd` with presentation-only env. Grant exactly these forms of `pwd`.
+  for (const prefix of [['pwd'], ['/bin/pwd'], ['/usr/bin/pwd'], ['/usr/bin/bash', '-lc', 'pwd'], ['/bin/bash', '-lc', 'pwd'], ['bash', '-lc', 'pwd']]) {
+    await hostOk(['grant', 'create', '--bot', state.botId, '--capability', 'process.spawn', '--folder', state.workspace, ...prefix.flatMap(token => ['--prefix', token])]);
   }
   const at = new Date(Date.now() + 8_000).toISOString();
   const prompt = [

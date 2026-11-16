@@ -1,3 +1,4 @@
+import { inertEnvironment } from '@your-bot/contracts';
 import { useState } from 'react';
 import type { Bot, PermissionRequestV2, Routine, RoutineRun, StandingGrantScope } from '@your-bot/contracts';
 import type { DesktopStore } from './store';
@@ -14,7 +15,7 @@ export function RequestDetails({ request, run, routine }: { request: PermissionR
       <div className="argv" aria-label="Command arguments">{argvOf(request).map((token, index) => <code className="argv-token" key={index}>{token}</code>)}</div>
       <div className="scope"><span className="tag">cwd</span><code>{request.command.cwd}</code></div>
       {request.command.env?.length ? <div className="scope"><span className="tag">env</span><code>{request.command.env.map(entry => entry.name).join(', ')}</code></div> : null}
-      {request.command.env?.length ? <p className="help">This command sets environment variables, so it can only be approved for now, never always.</p> : null}</div>}
+      {request.command.env?.some(entry => !inertEnvironment(entry)) ? <p className="help">This command sets environment variables that can change what runs, so it can only be approved for now, never always.</p> : null}</div>}
     {request.mcp && <div className="scope-list"><h3>MCP tool call</h3><div className="scope"><span className="tag">server</span><code>{request.mcp.serverId}</code></div><div className="scope"><span className="tag">tool</span><code>{request.mcp.tool}</code></div></div>}
     {request.agentTool && <div className="scope-list"><h3>Agent tool</h3><div className="scope"><span className="tag">tool</span><code>{request.agentTool.title}</code></div>{request.agentTool.kind && <div className="scope"><span className="tag">kind</span><code>{request.agentTool.kind}</code></div>}</div>}
     {request.routineRunId && <div className="scope-list"><h3>Routine run</h3><div className="scope"><span className="tag">routine</span><code>{routine?.name ?? 'Unknown routine'}</code></div><div className="scope"><span className="tag">run</span><code>{run?.id ?? request.routineRunId}{run ? ` · ${run.trigger}` : ''}</code></div></div>}

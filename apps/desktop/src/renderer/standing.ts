@@ -1,3 +1,4 @@
+import { inertEnvironment } from '@your-bot/contracts';
 import type { Bot, PermissionDecisionV2, PermissionRequestV2, StandingGrantScope } from '@your-bot/contracts';
 
 /** Request that never gets a standing option: reasons that identify arbitrary code. */
@@ -6,7 +7,7 @@ export type StandingKind = 'folder' | 'command' | 'mcp' | 'tool';
 
 /**
  * Which standing-grant scope shape (if any) the UI may offer for a request. Custom Python,
- * library.install, network and settings requests never qualify, nor do commands that set env
+ * library.install, network and settings requests never qualify, nor do commands that set a non-inert env variable
  * (they never match a standing grant), nor requests without a bot.
  */
 export function standingKind(request: PermissionRequestV2): StandingKind | undefined {
@@ -14,7 +15,7 @@ export function standingKind(request: PermissionRequestV2): StandingKind | undef
   switch (request.capability) {
     case 'file.read': case 'file.write': case 'file.delete':
       return request.paths?.length && request.paths.every(path => `file.${path.access}` === request.capability) ? 'folder' : undefined;
-    case 'process.spawn': return request.command && !request.command.env?.length ? 'command' : undefined;
+    case 'process.spawn': return request.command && (request.command.env ?? []).every(inertEnvironment) ? 'command' : undefined;
     case 'mcp.call': return request.mcp ? 'mcp' : undefined;
     case 'tool.execute': return request.agentTool?.kind ? 'tool' : undefined;
     default: return undefined;

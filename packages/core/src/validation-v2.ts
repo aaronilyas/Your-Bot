@@ -197,8 +197,12 @@ export function validatePermissionInputV2(value: unknown): PermissionInputV2 {
   optional(object, 'routineRunId', v => id(v, 'routine run id'));
   optional(object, 'command', v => {
     assert(capability === 'process.spawn', 'Command detail requires process.spawn');
-    const command = record(v, ['command', 'args', 'cwd']);
+    const command = record(v, ['command', 'args', 'cwd', 'env'], ['command', 'args', 'cwd']);
     string(command.command, 'command', 4096); stringArray(command.args, 'command args', 256, 32_768); absolutePath(command.cwd, 'command cwd');
+    optional(command, 'env', e => {
+      assert(Array.isArray(e) && e.length <= 128, 'Invalid command env');
+      for (const entry of e) { const item = record(entry, ['name', 'value']); string(item.name, 'env name', 128); assert(ENV_NAME.test(item.name), 'Invalid env name'); string(item.value, 'env value', 32_768, true); }
+    });
   });
   optional(object, 'mcp', v => {
     assert(capability === 'mcp.call', 'MCP detail requires mcp.call');

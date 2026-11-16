@@ -67,7 +67,7 @@ export function matches(grant: StandingGrant, request: PermissionInputV2 & {env?
       if (!workspace || !command || !prefix?.length || request.env) return false;
       const folder = scope.folder ?? workspace;
       if (!isWithin(workspace, folder, platform) || !isWithin(folder, command.cwd, platform)) return false;
-      const argv = command.args.length ? [command.command, ...command.args] : shellTokens(command.command);
+      const argv = command.args.length ? [command.command, ...command.args] : shellTokens(command.command, platform);
       return !!argv && prefix.length <= argv.length && prefix.every((token, index) => token === argv[index]);
     }
     case 'mcp.call':
@@ -91,11 +91,33 @@ export function subject(request: PermissionInputV2): string {
 }
 
 /**
- * Tokens of an args-less command (a shell command line, see WorkspaceHost). Returns undefined when
- * the line contains any shell syntax, so `git status; rm -rf ~` can never match a ["git"] grant.
+ * Tokens of an args-less command (a shell command line, see WorkspaceHost). POSIX single quotes are
+ * literal on POSIX (cmd.exe has no such quoting, so lines with quotes never match on Windows), so
+ * `bash -lc 'git status'` yields ["bash", "-lc", "git status"]. Returns undefined when the
+ * line contains any other shell syntax outside single quotes, so `git status; rm -rf ~` can never
+ * match a ["git"] grant. Prefix tokens are compared whole, so a grant ending in "git status" never
+ * matches the token "git status; rm".
  */
-export function shellTokens(line: string): string[] | undefined {
-  if (/[;&|<>$`()*?!~"'{}\[\]#%^\\\n\r]/.test(line)) return undefined;
-  const tokens = line.split(/[ \t]+/).filter(Boolean);
+export function shellTokens(line: string, platform: NodeJS.Platform = process.platform): string[] | undefined {
+  // cmd.exe does not treat single quotes as quoting (so `'x & y'` would still run y): no quotes there.
+  if (platform === 'win32' && line.includes("'")) return undefined;
+  const tokens: string[] = [];
+  let current: string | undefined;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === "'") {
+      const close = line.indexOf("'", index + 1);
+      if (close < 0) return undefined;
+      current = (current ?? '') + line.slice(index + 1, close);
+      index = close;
+    } else if (char === ' ' || char === '\t') {
+      if (current !== undefined) { tokens.push(current); current = undefined; }
+    } else if (/[;&|<>$`()*?!~"{}\[\]#%^\\\n\r]/.test(char)) {
+      return undefined;
+    } else current = (current ?? '') + char;
+  }
+  if (current !== undefined) tokens.push(current);
   return tokens.length ? tokens : undefined;
 }
+
+export { inertEnvironment } from '@your-bot/contracts';
