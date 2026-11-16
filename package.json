@@ -23,7 +23,8 @@
     "dev": "npm run build && npm run dev -w @your-bot/desktop",
     "start": "npm run start -w @your-bot/desktop",
     "package": "npm run package -w @your-bot/desktop",
-    "test:linux": "node tests/linux/run.mjs"
+    "test:linux": "node tests/linux/run.mjs",
+    "demo": "node scripts/demo.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
