@@ -1,8 +1,42 @@
 # Executed validation
 
+## v2 (Grok Bot parity), November 15, 2026
+
+Hosts: workstation `omarchy` (Arch-based Omarchy, x86_64, Node 26.12, bubblewrap 0.13.1, Grok Build 1.0.77); `ubuntu` SSH host (also Arch-based, x86_64, Node 26); `windows` (Windows 11 x64, portable Node 22.23.5 in %TEMP%); Ubuntu 26.04 container (Node 22.23.5) for strict/security suites. `macmini` (macOS) was locked and unreachable: **macOS is not validated**.
+
+| Check | Outcome |
+| --- | --- |
+| `npm run build`, `npm run typecheck` | Pass (all 12 workspaces incl. runtime and `apps/host`) |
+| `npm run test:linux` (Ubuntu 26.04, `--network none`) at 370e1a7 | All steps pass: vitest **466 passed** / 3 opt-in skips; `test:security` **201 passed**; `test:integration` **5 passed** (incl. real contained ACP) |
+| `npx vitest run` on the Arch workstation | All pass except the 10 strict bubblewrap/contained-ACP tests, which fail closed with `CONTAINMENT_UNAVAILABLE` because the strict launcher supports only the Debian/Ubuntu multiarch layout (unchanged v1 behaviour) |
+| Windows: workspace, adapters, mcp, remote, runtime, core, secrets, skills, `tests/v2-runtime.test.ts` at 85a7d7a | **339 passed**, 15 skipped (12 Linux-only bubblewrap, 3 opt-in) |
+| `npm run package` + `npm run test:desktop` | Pass: packaged entrypoint window, v2 renderer/preload/IPC, approval dialog, real Python 42, cancellation, shutdown cleanup, restart restore |
+| `YOUR_BOT_REAL_AGENT=grok` adapter and runtime tests | Pass: real Grok Build edits a file and runs a command through core-mediated `fs/*`/`terminal/*` |
+| `YOUR_BOT_BROWSER_TEST=1` | Pass: Playwright MCP through the authenticated proxy reads a local page title |
+| `npm run demo` | **Pass** (below) |
+
+### Scripted demo (`npm run demo`)
+
+One unattended run against the real Grok Build CLI and a second machine:
+
+1. `your-bot-host init` + `run --listen` (TLS WSS, pinned fingerprint).
+2. Via the token-authenticated control channel: host-launched Grok provider; trusted bot with a temp workspace.
+3. Interactive: Grok writes `demo.txt` and runs `cat demo.txt`; `file.read`, `file.write`, `process.spawn` approved interactively and audited.
+4. Standing grants (workspace read/write; exact `pwd` command forms) and a routine a few seconds ahead: the routine completed with **zero permission requests**; audit `file.read/standing, file.write/standing, process.spawn/standing`.
+5. `ubuntu` clones the branch into `/tmp`, `your-bot-remote pair <code>`, finds the pending approval for a command outside the grants and approves it; audit `decidedBy device:<id>`. After `your-bot-host revoke`, the device's approvals call is rejected.
+6. Teardown on both machines.
+
+Fixes found by end-to-end runs (all with tests): ESM main bundle missing `require` for bundled `ws` (packaged app could not start); 10-minute default agent turn budget (`your-bot-host run --agent-timeout`); Grok's login-shell command lines with presentation-only env could never match standing grants (inert-env allowlist shared via contracts; POSIX single quotes; never on Windows); Windows could not open a file-backed gateway (POSIX mode check) and lacked `O_NOFOLLOW` (explicit symlink refusal).
+
+### Unverified / limits
+
+macOS (locked host); real Claude Code / Codex / Gemini CLI agents (only Grok Build was exercised; Claude usage was exhausted during the run); real LM Studio/llama.cpp (as in v1). Ubuntu's patched pip wheel cannot run in the offline strict sandbox (`/etc/ssl/certs` absent), so `test:linux` installs upstream pip 25.3. See [security](security.md) for trusted-profile and standing-grant caveats.
+
+## v1 baseline, October 9, 2026
+
 Validation was run on October 9, 2026. Host: Linux x86_64, Node 22.22.1, Python 3.14, bubblewrap 0.11.1. Native desktop: Electron 44.7.0 in a disposable Ubuntu 26.04/Xvfb container, non-root application user, Chromium sandbox enabled, real Python and bubblewrap/seccomp workers. The container has no host mounts or runtime network access; its mock model listens only inside the container.
 
-## Commands and outcomes
+### Commands and outcomes
 
 | Check | Executed outcome |
 | --- | --- |
@@ -22,7 +56,7 @@ The native test asserts context isolation, renderer sandbox, absence of renderer
 
 Initial direct-host Electron startup attempts failed because AppArmor blocked Chromium's user namespace fallback and its development helper was not setuid/root-owned. T3 browser preview also reported that explicit host sandbox blocker. An initial Ubuntu 24.04 container attempt failed closed when its bubblewrap could not initialize the private proc/network mounts. The final supported test image and nested-namespace configuration passed. These failures are not recorded as successful application execution.
 
-## Required scenarios
+### Required scenarios
 
 | # | Scenario | Evidence / status |
 | --- | --- | --- |
@@ -41,7 +75,7 @@ Initial direct-host Electron startup attempts failed because AppArmor blocked Ch
 | 13 | Close cleans subprocesses | Native quit with a live Python loop asserts tracked children terminated; executor/ACP close cleanup tests |
 | 14 | Gateway without Electron | Five integration tests use principal-bound in-process command/event transport |
 
-## Security coverage and external limitations
+### Security coverage and external limitations
 
 Executor tests exercise unauthorized user-file/runtime writes, hidden home secrets, exact grants, code mutation/hash mismatches, syscall and x32 denial, symlink replacement after pinning, writable hardlink refusal, scratch cleanup, cancellation, output/time/memory/file limits, ignored package initialization hooks and offline wheel installation/import. The fixture wheel is generated locally. On systems without bundled pip, the separately approved installer bootstrap test accesses only the two allowed PyPI HTTPS endpoints. No global Python packages were installed.
 

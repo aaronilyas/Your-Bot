@@ -81,21 +81,28 @@ Resume from this file alone. Plan and package specs: [docs/v2/PLAN.md](v2/PLAN.m
   failed on bundled CJS `ws` (`Dynamic require of "events"`); desktop build/dev scripts now inject a
   createRequire banner. packaged-startup.sh prints the app log when the window never appears.
 
-## In flight
-- P10 demo + cross-OS (see Next).
+- P10 demo merged and passing (`npm run demo`); Windows suite green (339/15 skipped); docs updated
+  (README, architecture, security, validation, engineering report).
+
+## End state (each item → proving tests)
+1. Bots — core `v2.test.ts` (bots, sessions, migration, null patch), desktop `ui-v2.test.ts`. ✅
+2. Trusted profile — adapters `trusted.test.ts` (Linux + Windows), real Grok `real-agent.test.ts`,
+   `tests/v2-runtime.test.ts` (real WorkspaceHost; Linux + Windows), workspace `*.test.ts`
+   (Linux + Windows), demo. ✅ Linux/Windows; **macOS unverified (macmini locked)**.
+3. Standing permissions — core `security-v2.test.ts`, `security-shell-grants.test.ts`, demo routine. ✅
+4. Continuity — adapters `trusted.test.ts` (session/load), core `continuity.test.ts`. ✅
+5. Routines — core `schedule.test.ts`, `security-continuity.test.ts` (blocked waits, interrupted),
+   `tests/v2-runtime.test.ts` unattended routine, demo. ✅
+6. Remote — remote `security.test.ts`/`client.test.ts`/`cli.test.ts`, `tests/v2-runtime.test.ts`
+   pair+approve, `tests/v2-control.test.ts`, demo with a second machine. ✅
+7. MCP + browser — mcp `broker.test.ts`, opt-in `browser.test.ts` (passed). ✅
+8. Skills + encrypted keys — skills/secrets tests, core secrets-at-rest tests. ✅
 
 ## Next
-2. Full validation: `npm run build`, `npm run typecheck`, `npx vitest run` (expect only the 10
-   Arch-environmental strict failures), `npm run test:linux` (must be fully green), `npm run
-   package` + `npm run test:desktop` (desktop smoke; preload now has chooseDirectory), visual
-   check of the v2 UI (CSS never seen rendered).
-3. P10: scripted demo (`scripts/demo.mjs` or similar): headless host on this machine with a
-   trusted Grok Build bot editing a file and running a command; a routine firing unattended under
-   standing grants; the `ubuntu` host (has Node 26 + grok) pairing via `your-bot-remote pair` and
-   answering an approval. Cross-OS trusted tests: Windows via portable Node in %TEMP% (clone via
-   https; no GitHub SSH key there) with claude-agent-acp; macOS once `macmini` is unlocked.
-4. Docs: README, architecture, security (trusted-profile threat model, standing-grant caveats,
-   control channel, remote protocol), validation; then one PR integration → main.
+- Owner: unlock `macmini`, then run the trusted suites there (portable Node in a temp dir;
+  `npx vitest run packages/workspace packages/adapters packages/runtime tests/v2-runtime.test.ts`).
+- Optional: real Claude Code (`YOUR_BOT_REAL_AGENT=claude`) on Linux/Windows once Claude usage resets.
+- Review and merge the PR integration/grok-bot-parity → main.
 
 ## Open decisions / owner actions
 - Claude account hit its 5-hour limit during wave 2 (resets 9:10pm ET); Antigravity quota exhausted
