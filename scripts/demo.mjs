@@ -418,7 +418,8 @@ async function stepRoutine() {
   state.phase = 'routine';
   state.autoApprove = false;
   state.routinePerms = [];
-  await hostOk(['grant', 'create', '--bot', state.botId, '--capability', 'file.write', '--folder', state.workspace]);
+  // Agents commonly read a file before writing it (existence/diff checks), so grant both in the workspace.
+  for (const capability of ['file.read', 'file.write']) await hostOk(['grant', 'create', '--bot', state.botId, '--capability', capability, '--folder', state.workspace]);
   // Agents differ in how they shape terminal requests: plain argv, or (Grok Build) a login-shell
   // line `/usr/bin/bash -lc pwd` with presentation-only env. Grant exactly these forms of `pwd`.
   for (const prefix of [['pwd'], ['/bin/pwd'], ['/usr/bin/pwd'], ['/usr/bin/bash', '-lc', 'pwd'], ['/bin/bash', '-lc', 'pwd'], ['bash', '-lc', 'pwd']]) {
