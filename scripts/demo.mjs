@@ -162,14 +162,17 @@ function requireAlive() {
   if (state.hostExit) throw new Error(`host exited early code=${state.hostExit.code} signal=${state.hostExit.signal} log=${state.hostLog.slice(-15).join(' | ')}`);
 }
 
+/** The second machine clones the current branch from origin; the demo never pushes. */
 async function pushBranch() {
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-  if (branch === 'main' || branch === 'master' || branch.startsWith('integration/')) throw new Error(`refusing to push ${branch}`);
   if (spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).stdout.trim()) {
-    log('working tree is dirty; pushing committed HEAD only');
+    log('working tree is dirty; the second machine uses the committed branch on origin');
   }
-  const output = await git(['push', '-u', 'origin', `HEAD:${branch}`], 120_000);
-  log(output.trim() || `pushed ${branch}`);
+  await git(['fetch', 'origin', branch], 120_000);
+  const head = (await git(['rev-parse', 'HEAD'])).trim();
+  const remote = (await git(['rev-parse', `origin/${branch}`])).trim();
+  if (head !== remote) throw new Error(`push ${branch} first: HEAD ${head.slice(0, 7)} != origin ${remote.slice(0, 7)}`);
+  log(`using origin/${branch} at ${head.slice(0, 7)}`);
   return branch;
 }
 
