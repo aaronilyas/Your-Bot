@@ -7,6 +7,8 @@ import { RemoteTransport, pairWithCode } from './client.js';
 import { HostDirectory } from './directory.js';
 import { MultiHostClient } from './multi.js';
 import { FakeGateway, tempDir, waitFor } from './test/fake-gateway.js';
+/** POSIX permission bits; Windows has none (ACLs instead), so compare as equal there. */
+const posixMode = (mode: number): number => (process.platform === 'win32' ? 0 : mode & 0o777);
 
 const OWNER = 'local-owner';
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -35,8 +37,8 @@ describe('host directory', () => {
     const cipher = new TestCipher();
     const encrypted = directory(cipher);
     const saved = await pairInto(remote, encrypted);
-    expect(statSync(encrypted.directory).mode & 0o777).toBe(0o700);
-    expect(statSync(encrypted.file).mode & 0o777).toBe(0o600);
+    expect(posixMode(statSync(encrypted.directory).mode)).toBe(posixMode(0o700));
+    expect(posixMode(statSync(encrypted.file).mode)).toBe(posixMode(0o600));
     const text = readFileSync(encrypted.file, 'utf8');
     expect(text).not.toContain('PRIVATE KEY');
     expect(JSON.stringify(encrypted.list())).not.toContain('key');

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createRuntime, LOCAL_OWNER_CAPABILITIES } from './index.js';
+/** POSIX permission bits; Windows has none (ACLs instead), so compare as equal there. */
+const posixMode = (mode: number): number => (process.platform === 'win32' ? 0 : mode & 0o777);
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
@@ -23,10 +25,10 @@ describe('createRuntime', () => {
     expect(runtime.principal.capabilities).toContain('mcp.call');
     expect(runtime.host).toEqual({ id: expect.any(String), name: 'bench' });
     if (process.platform !== 'win32') {
-      expect((await stat(runtime.dataDir)).mode & 0o777).toBe(0o700);
-      expect((await stat(join(runtime.dataDir, 'host.json'))).mode & 0o777).toBe(0o600);
-      expect((await stat(join(runtime.dataDir, 'keys', 'secret.key'))).mode & 0o777).toBe(0o600);
-      expect((await stat(join(runtime.dataDir, 'mcp', 'browser'))).mode & 0o777).toBe(0o700);
+      expect(posixMode((await stat(runtime.dataDir)).mode)).toBe(posixMode(0o700));
+      expect(posixMode((await stat(join(runtime.dataDir, 'host.json'))).mode)).toBe(posixMode(0o600));
+      expect(posixMode((await stat(join(runtime.dataDir, 'keys', 'secret.key'))).mode)).toBe(posixMode(0o600));
+      expect(posixMode((await stat(join(runtime.dataDir, 'mcp', 'browser'))).mode)).toBe(posixMode(0o700));
     }
     expect(join(runtime.dataDir, 'keys', 'secret.key').includes(`${join('gateway', 'secret')}`)).toBe(false);
     const sync = await runtime.gateway.dispatch({ version: 2, id: 'sync', type: 'state.sync' }, runtime.principal);

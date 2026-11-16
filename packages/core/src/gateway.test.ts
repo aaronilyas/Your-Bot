@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AgentAdapter, AgentRunContext, AppSettings, CommandPayload, CommandResult, DesktopCommand, DesktopEvent, DesktopGateway, PermissionRequest, Principal, ToolExecutionContext, ToolExecutor, ToolInvocation } from '@your-bot/contracts';
 import { createGateway, type GatewayOptions } from './index.js';
+/** POSIX permission bits; Windows has none (ACLs instead), so compare as equal there. */
+const posixMode = (mode: number): number => (process.platform === 'win32' ? 0 : mode & 0o777);
 
 const local: Principal = { id: 'owner', kind: 'local', capabilities: ['conversation', 'settings', 'tool.execute', 'file.read', 'file.write', 'file.delete', 'library.install', 'network', 'process.spawn'] };
 const remote: Principal = { id: 'remote', kind: 'remote', capabilities: [...local.capabilities] };
@@ -299,7 +301,7 @@ describe('cancellation, settings, restart and cleanup', () => {
     const command = cmd({type: 'session.create', agentId: 'fake'}); const created = await first.gateway.dispatch(command, local); ok(created);
     const sent = await first.gateway.dispatch(cmd({type: 'message.send', sessionId: created.sessionId!, content: 'Persist me'}), local); ok(sent); await terminal(first.events, sent.taskId!);
     const secret = 'restart-api-key'; ok(await first.gateway.dispatch(cmd({type: 'settings.update', settings: {providers: [{id: 'p', name: 'P', kind: 'lmstudio', enabled: true, apiKey: secret}]}}), local));
-    const before = first.events.at(-1)!.sequence; expect((await stat(path)).mode & 0o777).toBe(0o600); expect((await stat(join(dir, 'data'))).mode & 0o777).toBe(0o700); await first.gateway.close();
+    const before = first.events.at(-1)!.sequence; expect(posixMode((await stat(path)).mode)).toBe(posixMode(0o600)); expect(posixMode((await stat(join(dir, 'data'))).mode)).toBe(posixMode(0o700)); await first.gateway.close();
     const reload = vi.fn(async (_settings: AppSettings) => undefined); const second = await setup({databasePath: path, onSettingsChanged: reload}); expect(reload.mock.calls[0][0].providers[0].apiKey).toBe(secret);
     expect(await second.gateway.dispatch(command, local)).toEqual(created); expect(second.events).toEqual([]);
     const state = await second.gateway.dispatch(cmd({type: 'state.sync', afterSequence: 0}), local); ok(state);

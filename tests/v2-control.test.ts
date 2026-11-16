@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { onCleanup, tempDir, waitFor } from './v2-helpers.js';
+/** POSIX permission bits; Windows has none (ACLs instead), so compare as equal there. */
+const posixMode = (mode: number): number => (process.platform === 'win32' ? 0 : mode & 0o777);
 
 const bin = fileURLToPath(new URL('../apps/host/dist/bin.js', import.meta.url));
 
@@ -71,9 +73,9 @@ describe('owner control channel', () => {
     expect(text.stdout()).not.toContain(secret);
     expect(text.stderr()).not.toContain(secret);
     if (process.platform !== 'win32') {
-      expect((await stat(dataDir)).mode & 0o777).toBe(0o700);
-      expect((await stat(join(dataDir, 'control.token'))).mode & 0o777).toBe(0o600);
-      expect((await stat(endpoint!)).mode & 0o777).toBe(0o600);
+      expect(posixMode((await stat(dataDir)).mode)).toBe(posixMode(0o700));
+      expect(posixMode((await stat(join(dataDir, 'control.token'))).mode)).toBe(posixMode(0o600));
+      expect(posixMode((await stat(endpoint!)).mode)).toBe(posixMode(0o600));
     }
     const wrong = await frames(endpoint!, [{ token: 'not-the-owner-token-value-xxxx' }, { version: 2, id: 'evil', type: 'bot.create', bot: evilBot }]);
     expect(wrong.some(line => line.includes('UNAUTHORIZED'))).toBe(true);

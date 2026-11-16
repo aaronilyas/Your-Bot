@@ -11,6 +11,8 @@ import { createRemoteHost, type RemoteHost, type RemoteHostOptions } from './ser
 import { Link, RemoteError, RemoteTransport, connectDevice, credentialsFrom, pairWithCode, type PairedHost } from './client.js';
 import { CLOSE, DEFAULT_DEVICE_CAPABILITIES, decodePairingCode, encodePairingCode } from './protocol.js';
 import { FakeGateway, tempDir, waitFor } from './test/fake-gateway.js';
+/** POSIX permission bits; Windows has none (ACLs instead), so compare as equal there. */
+const posixMode = (mode: number): number => (process.platform === 'win32' ? 0 : mode & 0o777);
 
 const OWNER = 'local-owner';
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -35,9 +37,9 @@ const closed = (link: Link) => new Promise<RemoteError>(resolve => link.onClose(
 describe('remote host TLS listener', () => {
   it('persists an owner-only certificate, key and device store, and keeps its identity across restarts', async () => {
     const { remote, dir, gateway } = await host();
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
-    expect(statSync(join(dir, 'tls')).mode & 0o777).toBe(0o700);
-    for (const file of ['tls/key.pem', 'tls/cert.pem', 'devices.sqlite']) expect(statSync(join(dir, file)).mode & 0o777).toBe(0o600);
+    expect(posixMode(statSync(dir).mode)).toBe(posixMode(0o700));
+    expect(posixMode(statSync(join(dir, 'tls')).mode)).toBe(posixMode(0o700));
+    for (const file of ['tls/key.pem', 'tls/cert.pem', 'devices.sqlite']) expect(posixMode(statSync(join(dir, file)).mode)).toBe(posixMode(0o600));
     const cert = new X509Certificate(readFileSync(join(dir, 'tls/cert.pem')));
     expect(cert.verify(cert.publicKey)).toBe(true);
     const { fingerprint, hostId } = remote;

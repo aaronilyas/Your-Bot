@@ -70,7 +70,9 @@ export class Store {
     // v2: events that must not reach v1 subscribers although their type is a v1 type
     // (e.g. permission.resolved for an mcp.call request).
     if (!columns.includes('v2_only')) this.db.exec('ALTER TABLE events ADD COLUMN v2_only INTEGER NOT NULL DEFAULT 0');
-    if (this.path !== ':memory:' && (statSync(this.path).mode & 0o077)) throw new GatewayError('UNSAFE_DATABASE', 'Database permissions must be owner only');
+    // Windows has no POSIX modes (always reports 0666); there the per-user data directory's inherited
+    // ACL is the protection (see docs/security.md). Ownership/regular-file/link checks still apply.
+    if (this.path !== ':memory:' && process.platform !== 'win32' && (statSync(this.path).mode & 0o077)) throw new GatewayError('UNSAFE_DATABASE', 'Database permissions must be owner only');
   }
   bindLocalIdentity(id: string): void {
     const row = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('localIdentity') as Row | undefined;
