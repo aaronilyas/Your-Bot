@@ -1,0 +1,92 @@
+name: Build installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (AppImage, deb, rpm, pacman, tar.gz)
+            os: ubuntu-24.04
+            script: package:linux
+          - name: macOS (dmg, zip — Intel + Apple Silicon)
+            os: macos-14
+            script: package:mac
+          - name: Windows (NSIS installer, zip)
+            os: windows-latest
+            script: package:win
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+
+      - run: npm ci
+
+      - name: Build installers
+        shell: bash
+        run: |
+          extra=()
+          if [ "$RUNNER_OS" = macOS ] && [ -z "$CSC_LINK" ]; then
+            # No Developer ID certificate: ad-hoc sign so Apple Silicon does not report the app as damaged.
+            extra=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
+          fi
+          npm run ${{ matrix.script }} -- "${extra[@]}"
+        env:
+          # Optional code signing. Leave these secrets unset to produce unsigned (macOS: ad-hoc signed) builds.
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CERT_P12_BASE64 || runner.os == 'Windows' && secrets.WIN_CERT_PFX_BASE64 || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERT_PASSWORD || runner.os == 'Windows' && secrets.WIN_CERT_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
+            apps/desktop/release/*.pacman
+            apps/desktop/release/*.tar.gz
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Add Linux install script
+        run: cp scripts/install.sh dist/install.sh
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*

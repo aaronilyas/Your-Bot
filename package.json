@@ -23,6 +23,9 @@
     "dev": "npm run build && npm run dev -w @your-bot/desktop",
     "start": "npm run start -w @your-bot/desktop",
     "package": "npm run package -w @your-bot/desktop",
+    "package:linux": "npm run package:linux -w @your-bot/desktop",
+    "package:mac": "npm run package:mac -w @your-bot/desktop",
+    "package:win": "npm run package:win -w @your-bot/desktop",
     "test:linux": "node tests/linux/run.mjs",
     "demo": "node scripts/demo.mjs"
   },

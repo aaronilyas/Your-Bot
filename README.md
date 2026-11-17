@@ -26,7 +26,32 @@ npm run build
 npm start
 ```
 
-`npm run dev` builds the backend and starts Electron with Vite renderer updates. `npm run package` creates Linux x64 AppImage, amd64 deb and unpacked artifacts in `apps/desktop/release/`. Packaged applications include Electron; Node is needed separately only for Node ACP harnesses. The deb does not install Python/sandbox prerequisites automatically. The project is MIT licensed.
+`npm run dev` builds the backend and starts Electron with Vite renderer updates. Packaged applications include Electron; Node is needed separately only for Node ACP harnesses. The project is MIT licensed.
+
+### Installers
+
+Pushing a `v*` tag runs [.github/workflows/release.yml](.github/workflows/release.yml), which builds every installer on its native OS and attaches them to a draft GitHub release with `SHA256SUMS.txt`. It can also be started by hand (Actions → Build installers → Run workflow); the files are then attached to the run as artifacts.
+
+| Platform | Files | Architectures |
+| --- | --- | --- |
+| Any Linux distro | `Your-Bot-<v>-linux-<arch>.AppImage` (needs FUSE 2), `.tar.gz` | x64, arm64 |
+| Debian, Ubuntu, Mint, Pop!_OS | `.deb` | amd64, arm64 |
+| Fedora, RHEL/Rocky/Alma 9+, openSUSE | `.rpm` | x86_64, aarch64 |
+| Arch, Manjaro, EndeavourOS | `.pacman` (`sudo pacman -U <file>`) | x64, aarch64 |
+| macOS 12+ | `.dmg`, `.zip` | Intel (x64), Apple Silicon (arm64) |
+| Windows 10/11 | `Your-Bot-Setup-<v>.exe` (selects the architecture itself), per-arch setup `.exe`, portable `.zip` | x64, arm64 |
+
+On Linux, one command picks the right package for the distro and also installs the strict-profile prerequisites (Python 3 + venv, bubblewrap, gcc):
+
+```sh
+curl -fsSL https://github.com/aaronilyas/Your-Bot/releases/latest/download/install.sh | sh
+```
+
+`YOUR_BOT_FORMAT=appimage` installs the AppImage into `~/.local/bin` without root; `YOUR_BOT_VERSION=v0.1.0` pins a release; `YOUR_BOT_NO_DEPS=1` skips the prerequisites. The deb and rpm list those prerequisites as *Recommends*. The pacman package does not list them, so the script installs them.
+
+To build locally, run `npm run package:linux` (all Linux formats, x64 + arm64), `npm run package:mac` on macOS, or `npm run package:win` on Windows. Windows installers can also be cross-built from Linux in the `electronuserland/builder:wine` container. Building `.rpm` needs `rpmbuild`. Results go to `apps/desktop/release/`.
+
+Builds are unsigned unless signing secrets are configured. With no certificate, macOS builds are ad-hoc signed. The first launch then needs right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/Your Bot.app"`, and Windows SmartScreen shows "More info → Run anyway". To sign, add the repository secrets `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (Developer ID signing + notarization) and `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD`.
 
 Chromium's renderer sandbox must work on the host. If AppArmor prevents development Electron from starting, use an administrator-installed package or configure the host's approved Chromium sandbox policy. The application never supplies `--no-sandbox` and does not change system policy. The disposable container workflow below permits native validation without changing the host.
 

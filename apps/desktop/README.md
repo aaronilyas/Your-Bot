@@ -19,7 +19,9 @@ npm run dev -w @your-bot/desktop
 `dev` builds Electron main/preload and starts loopback Vite with renderer HMR. Restart it after changing main/preload. `start` runs a previously built Electron application. `dev:browser` starts Vite alone: open `http://127.0.0.1:5173/?demo=1` for the mock demonstration, or omit the query to inspect disconnected behavior. Typing “Read my workspace” in the demonstration exercises an exact-path permission dialog, simulated tool output, streaming and cancellation. No demo operation reads files, installs packages, launches processes, or contacts providers.
 
 ```sh
-npm run package -w @your-bot/desktop      # Linux AppImage + deb
+npm run package:linux -w @your-bot/desktop # Linux AppImage, deb, rpm, pacman, tar.gz (x64 + arm64)
+npm run package:mac -w @your-bot/desktop   # macOS dmg + zip (x64 + arm64), run on macOS
+npm run package:win -w @your-bot/desktop   # Windows NSIS installer + zip (x64 + arm64)
 npm run package:dir -w @your-bot/desktop  # unpacked Linux application
 npm run test:electron -w @your-bot/desktop # actual Electron/Xvfb smoke check; build first
 ```

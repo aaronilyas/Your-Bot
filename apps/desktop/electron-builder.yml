@@ -1,22 +1,141 @@
 appId: dev.yourbot.desktop
 productName: Your Bot
+copyright: Copyright © Your Bot contributors
 asar: true
 directories:
   output: release
+  buildResources: resources
 files:
   - dist/main/**
   - dist/preload/**
   - dist/renderer/**
   - package.json
+artifactName: Your-Bot-${version}-${os}-${arch}.${ext}
+npmRebuild: false
+# Release uploads are done by CI (.github/workflows/release.yml), never implicitly by the builder.
+publish: null
+
+# ---------------------------------------------------------------- Linux
+# AppImage runs on practically every glibc distro; deb covers Debian/Ubuntu/Mint/Pop!_OS,
+# rpm covers Fedora/RHEL/Rocky/Alma/openSUSE, pacman covers Arch/Manjaro/EndeavourOS,
+# tar.gz is the portable fallback for anything else.
 linux:
   syncDesktopName: true
   icon: resources/icon.png
   category: Utility
-  target:
-    - AppImage
-    - deb
   executableName: your-bot
   synopsis: Private, local-first conversational agent
   maintainer: Your Bot contributors
-artifactName: Your-Bot-${version}-${arch}.${ext}
-npmRebuild: false
+  vendor: Your Bot contributors
+  target:
+    - AppImage
+    - deb
+    - rpm
+    - pacman
+    - tar.gz
+# The secure (strict) execution profile needs Python 3 + venv and bubblewrap. They are
+# recommended rather than required so the app still installs where they are packaged differently.
+deb:
+  packageName: your-bot
+  # Defaults plus libgbm/ALSA, which minimal Debian/Ubuntu installs lack (Ubuntu 24.04+ renamed libasound2).
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - libgbm1
+    - libasound2t64 | libasound2
+  recommends:
+    - python3
+    - python3-venv
+    - bubblewrap
+    - gcc
+    - libc6-dev
+rpm:
+  packageName: your-bot
+  # Defaults plus libgbm/ALSA by soname, so the same rpm resolves on Fedora/RHEL and openSUSE.
+  depends:
+    - gtk3
+    - libnotify
+    - nss
+    - libXScrnSaver
+    - (libXtst or libXtst6)
+    - xdg-utils
+    - at-spi2-core
+    - (libuuid or libuuid1)
+    - libgbm.so.1()(64bit)
+    - libasound.so.2()(64bit)
+  fpm:
+    - --rpm-tag
+    - 'Recommends: python3'
+    - --rpm-tag
+    - 'Recommends: bubblewrap'
+    - --rpm-tag
+    - 'Recommends: gcc'
+    - --rpm-tag
+    - 'Recommends: glibc-devel'
+pacman:
+  packageName: your-bot
+  # electron-builder's default list names packages Arch has dropped (http-parser,
+  # libappindicator-gtk3), which makes `pacman -U` fail. Electron bundles its own ffmpeg etc.
+  # python + bubblewrap (strict profile) must be installed separately: fpm drops optdepends.
+  depends:
+    - gtk3
+    - nss
+    - libxss
+    - libxtst
+    - libnotify
+    - libsecret
+    - alsa-lib
+    - at-spi2-core
+    - util-linux-libs
+    - xdg-utils
+
+# ---------------------------------------------------------------- macOS
+mac:
+  icon: resources/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  # Signing/notarization activate automatically when CSC_LINK / APPLE_ID secrets are present in CI.
+dmg:
+  title: ${productName} ${version}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ---------------------------------------------------------------- Windows
+win:
+  icon: resources/icon.png
+  executableName: your-bot
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Your Bot
+  deleteAppDataOnUninstall: false
+  artifactName: Your-Bot-Setup-${version}-${arch}.${ext}
