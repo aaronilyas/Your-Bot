@@ -46,8 +46,12 @@ jobs:
       - name: Build installers
         shell: bash
         run: |
+          # Unset secrets are passed as empty strings; electron-builder would read an empty CSC_LINK as a path.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || unset "$v"
+          done
           extra=()
-          if [ "$RUNNER_OS" = macOS ] && [ -z "$CSC_LINK" ]; then
+          if [ "$RUNNER_OS" = macOS ] && [ -z "${CSC_LINK:-}" ]; then
             # No Developer ID certificate: ad-hoc sign so Apple Silicon does not report the app as damaged.
             extra=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
           fi
