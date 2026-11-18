@@ -154,34 +154,41 @@
   }
 
   function renderPrimary(primary, platform) {
-    const btn = $('#primary');
+    const label = platform.os ? `Download for ${OS_NAMES[platform.os]}` : 'Download';
+    const href = primary ? primary.url : '#downloads';
+    // Every download button on the page (hero, nav, closer) points at the same file.
+    for (const btn of document.querySelectorAll('.js-primary')) btn.href = href;
+    for (const node of document.querySelectorAll('#primary-label, .js-primary-label')) node.textContent = label;
     if (primary) {
-      btn.href = primary.url;
-      $('#primary-label').textContent = `Download for ${OS_NAMES[platform.os]}`;
       $('#primary-sub').textContent = [primary.label === 'Installer' ? null : primary.label, primary.ext || null, primary.archLabel, formatSize(primary.size)]
         .filter(Boolean).join(' · ');
     } else if (platform.os) {
-      btn.href = '#downloads';
-      $('#primary-label').textContent = `Download for ${OS_NAMES[platform.os]}`;
       $('#primary-sub').textContent = 'See all downloads below';
     } else {
-      btn.href = '#downloads';
-      $('#primary-label').textContent = 'Download';
       $('#primary-sub').textContent = 'Linux · macOS · Windows';
     }
   }
 
   function renderMeta(release) {
-    const meta = $('#release-meta');
-    meta.replaceChildren();
+    const pill = $('#release-meta');
+    const text = pill.querySelector('.announce-text');
+    text.replaceChildren();
     if (!release) {
-      meta.append('No release is published yet. Installers appear here automatically once one is. ',
-        el('a', { href: RELEASES_URL, text: 'Releases on GitHub' }));
+      pill.href = RELEASES_URL;
+      text.append('First release coming soon ', el('span', { class: 'arrow', text: '→' }));
       return;
     }
     const date = formatDate(release.published_at);
-    meta.append(`${release.tag_name}${date ? ` · released ${date}` : ''} · `,
-      el('a', { href: release.html_url || `${RELEASES_URL}/latest`, text: 'Release notes' }));
+    pill.href = release.html_url || `${RELEASES_URL}/latest`;
+    text.append(el('b', { text: release.tag_name }), ` is out${date ? ` · ${date}` : ''} · Release notes `,
+      el('span', { class: 'arrow', text: '→' }));
+  }
+
+  function watchScroll() {
+    const nav = $('.nav');
+    const update = () => nav.classList.toggle('scrolled', window.scrollY > 8);
+    update();
+    window.addEventListener('scroll', update, { passive: true });
   }
 
   function wireCopyButtons() {
@@ -201,6 +208,7 @@
 
   async function main() {
     wireCopyButtons();
+    watchScroll();
     const [platform, release] = await Promise.all([detectPlatform(), loadRelease()]);
     const { byOs, checksums } = release ? classify(release.assets) : { byOs: null, checksums: null };
     renderLists(byOs, platform);
