@@ -2,10 +2,27 @@ import { useState, type FormEvent } from 'react';
 import type { AppSettingsV2, ProviderConfigV2 } from '@your-bot/contracts';
 import type { DesktopStore } from './store';
 import { Icon, Modal } from './ui';
+import { SEASON_LABELS, lookFor, type Appearance } from './appearance';
+import type { ColorMode, ThemeChoice } from '../shared/appearance';
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
-export function SettingsDialog({ settings, store, onClose }: { settings: AppSettingsV2; store: DesktopStore; onClose: () => void }) {
+type Tab = 'general' | 'providers';
+const TABS: { id: Tab; label: string; icon: 'palette' | 'terminal' }[] = [{ id: 'general', label: 'General', icon: 'palette' }, { id: 'providers', label: 'Providers', icon: 'terminal' }];
+
+/** Appearance applies and saves immediately, like the rest of the system settings it sits beside. */
+function GeneralSettings({ appearance }: { appearance: Appearance }) {
+  const { prefs, update } = appearance;
+  const current = SEASON_LABELS[lookFor('seasonal')];
+  return <div className="settings-panel"><h3 className="settings-group-title">Appearance</h3><div className="settings-group">
+    <label className="settings-row"><span><strong>Color mode</strong><span className="help">Light, dark, or match your system.</span></span><select value={prefs.colorMode} onChange={e => update({ colorMode: e.target.value as ColorMode })}><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <label className="settings-row"><span><strong>Theme</strong><span className="help">Seasonal colors change with the calendar.</span></span><select value={prefs.theme} onChange={e => update({ theme: e.target.value as ThemeChoice })}><option value="seasonal">Seasonal · now {current}</option><option value="spring">Spring</option><option value="summer">Summer</option><option value="autumn">Fall</option><option value="winter">Winter</option><option value="classic">Classic</option></select></label>
+    <label className="settings-row"><span><strong>Background art</strong><span className="help">{prefs.theme === 'classic' ? 'Classic has no background art. Pick a seasonal theme to see it.' : 'Seasonal illustrations, like fall leaves or a snowman, drawn faintly behind the conversation. They never cover text or controls.'}</span></span><input type="checkbox" role="switch" className="switch" checked={prefs.backgroundArt} onChange={e => update({ backgroundArt: e.target.checked })} /></label>
+  </div></div>;
+}
+
+export function SettingsDialog({ settings, store, appearance, onClose }: { settings: AppSettingsV2; store: DesktopStore; appearance: Appearance; onClose: () => void }) {
+  const [tab, setTab] = useState<Tab>('general');
   const [providers, setProviders] = useState<ProviderConfigV2[]>(() => structuredClone(settings.providers).map(({ apiKey: _secret, ...provider }) => provider));
   const [newKeys, setNewKeys] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -34,7 +51,10 @@ export function SettingsDialog({ settings, store, onClose }: { settings: AppSett
     else setError(result && !result.ok ? result.error.message : 'Could not save settings. Reconnect and try again.');
     setSaving(false);
   }
-  return <Modal title="Provider settings" onClose={onClose}><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
+  return <Modal title="Settings" onClose={onClose} wide><div className="settings-layout">
+    <div className="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">{TABS.map(item => <button key={item.id} role="tab" id={`settings-tab-${item.id}`} aria-selected={tab === item.id} aria-controls={`settings-panel-${item.id}`} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><Icon name={item.icon} size={15} />{item.label}</button>)}</div>
+    <div className="settings-content" role="tabpanel" id={`settings-panel-${tab}`} aria-labelledby={`settings-tab-${tab}`}>
+    {tab === 'general' ? <GeneralSettings appearance={appearance} /> : <><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
     <form onSubmit={event => void save(event)}><div className="provider-list">{providers.map((provider, index) => <fieldset className="provider" key={provider.id} disabled={saving}><legend>Provider {index + 1}</legend><div className="provider-top"><label>Name<input value={provider.name} onChange={e => patch(provider.id, { name: e.target.value })} /></label><label className="toggle"><input type="checkbox" checked={provider.enabled} onChange={e => patch(provider.id, { enabled: e.target.checked })} />Enabled</label><button type="button" className="icon-button" aria-label={`Remove ${provider.name}`} onClick={() => setProviders(current => current.filter(p => p.id !== provider.id))}><Icon name="trash" /></button></div>
       <div className="provider-grid"><label>Provider type<select value={provider.kind} onChange={e => { const kind = e.target.value as ProviderConfigV2['kind']; patch(provider.id, { kind, launch: undefined, envPassthrough: undefined, ...(kind === 'acp' ? { command: '/usr/bin/node', args: [''] } : { endpoint: kind === 'lmstudio' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:8080/v1' }) }); }}><option value="acp">ACP agent</option><option value="lmstudio">LM Studio</option><option value="llamacpp">llama.cpp</option><option value="openai-compatible">OpenAI compatible</option></select></label><label>Model ID (optional)<input value={provider.modelId ?? ''} placeholder="Discovered automatically" onChange={e => patch(provider.id, { modelId: e.target.value || undefined })} /></label></div>
       {provider.kind === 'acp' ? <>
@@ -48,5 +68,5 @@ export function SettingsDialog({ settings, store, onClose }: { settings: AppSett
     <button type="button" className="button text" disabled={saving || providers.length >= 128} onClick={() => setProviders(current => [...current, { id: crypto.randomUUID(), name: 'Local provider', kind: 'openai-compatible', endpoint: 'http://127.0.0.1:8080/v1', enabled: true }])}><Icon name="plus" />Add provider</button>
     <p className="help">Credentials stay in the private local store. Stored keys are never sent back to this interface.</p>
     {error && <p className="inline-error" role="alert">{error}</p>}<div className="modal-actions"><button type="button" className="button secondary" disabled={saving} onClick={onClose}>Cancel</button><button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></div>
-    </form></Modal>;
+    </form></>}</div></div></Modal>;
 }

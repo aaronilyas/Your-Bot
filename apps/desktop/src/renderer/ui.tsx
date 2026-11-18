@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 
 export type IconName = 'spark' | 'plus' | 'chat' | 'settings' | 'arrow' | 'stop' | 'shield' | 'close' | 'trash' | 'search' | 'refresh' | 'chevron' | 'terminal'
-  | 'bot' | 'clock' | 'key' | 'bell' | 'device' | 'edit' | 'play' | 'copy' | 'check' | 'brain';
+  | 'bot' | 'clock' | 'key' | 'bell' | 'device' | 'edit' | 'play' | 'copy' | 'check' | 'brain' | 'collapse' | 'expand' | 'folder' | 'palette';
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
     spark: <><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" /><path d="m20 2 .7 2.3L23 5l-2.3.7L20 8l-.7-2.3L17 5l2.3-.7Z" /></>,
@@ -26,6 +26,10 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     play: <path d="m7 5 12 7-12 7Z" />,
     copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" /></>,
     check: <path d="m5 12 5 5 9-10" />,
+    collapse: <path d="m6 6 6 6-6 6m7-12 6 6-6 6" />,
+    expand: <path d="m18 6-6 6 6 6m-7-12-6 6 6 6" />,
+    folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
+    palette: <><path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 2-2s-1-2 0-3 2-1 3-1a4 4 0 0 0 4-4c0-4.5-4-8-9-8Z" /><circle cx="7.5" cy="11" r="1" /><circle cx="10" cy="7" r="1" /><circle cx="15" cy="7.5" r="1" /></>,
     brain: <><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 3 5 3 3 0 0 0 5 2V4a3 3 0 0 0-3 0Z" /><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-3 5 3 3 0 0 1-5 2" /></>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;

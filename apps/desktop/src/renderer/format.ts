@@ -32,3 +32,15 @@ export function requestSubject(request: PermissionRequestV2): string {
 export const botName = (bots: Bot[], id: string | undefined): string => bots.find(bot => bot.id === id)?.name ?? (id ? `Unknown bot (${id.slice(0, 8)})` : 'No bot');
 export const capabilityLabel = (capability: CapabilityV2): string => capability;
 export function grantLabel(grant: StandingGrant, bots: Bot[]): string { return `${botName(bots, grant.botId)} · ${grant.capability} · ${describeScope(grant.scope)}`; }
+/** Compact roster time: "7:34 PM" today, "Yesterday", a weekday within the week, otherwise a short date. */
+export function shortTime(iso: string | undefined, now = new Date()): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(now) - day(date)) / 86400000);
+  if (days <= 0) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return date.toLocaleDateString([], { weekday: 'long' });
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}

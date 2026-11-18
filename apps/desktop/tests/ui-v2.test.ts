@@ -405,7 +405,8 @@ describe('provider settings', () => {
   it('configures a host-launched ACP agent for trusted bots with an exact settings.update', async () => {
     const { user, commands } = await open();
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Provider settings' });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Providers' }));
     await user.click(within(dialog).getByRole('button', { name: 'Add provider' }));
     await user.selectOptions(within(dialog).getByLabelText('Provider type'), 'acp');
     await user.selectOptions(within(dialog).getByLabelText('Launch mode'), 'host');

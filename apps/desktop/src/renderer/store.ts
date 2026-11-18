@@ -2,10 +2,14 @@ import type {
   AppSnapshotV2, Bot, CommandPayloadV2, CommandResultV2, DesktopCommandV2, DesktopEventV2, GrantAuditEntry, MemoryEntry,
   OwnerNotification, RoutineRun, SessionV2, StandingGrant, TaskId, BackendTransportV2, DeviceInfo, PermissionRequestV2, Routine,
 } from '@your-bot/contracts';
+import type { AppearancePrefs } from '../shared/appearance.js';
 
 /** The transport the renderer receives: v2 dispatch/subscribe plus the optional native folder picker. */
 export interface DesktopTransport extends BackendTransportV2 {
   chooseDirectory?(): Promise<string | undefined>;
+  /** Host-stored display preferences; without them the renderer falls back to browser storage. */
+  loadAppearance?(): Promise<AppearancePrefs | undefined>;
+  saveAppearance?(prefs: AppearancePrefs): Promise<boolean>;
 }
 export interface TaskActivity {
   id: TaskId; sessionId: string; status: string; text: string;

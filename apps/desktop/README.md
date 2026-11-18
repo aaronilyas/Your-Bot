@@ -2,7 +2,7 @@
 
 Standalone Electron 44.7 / React / Vite 8 / strict TypeScript application. The renderer and IPC speak wire contract **v2** (`packages/contracts/src/v2.ts`); v1 commands remain valid and the original chat experience is unchanged. All source and configuration for this workspace lives under `apps/desktop`.
 
-The renderer receives only `dispatch`, `subscribe` and one native folder picker, `chooseDirectory()` (see below). It has no core, provider, executor, Python, Node, filesystem, or identity API. The production executable wires the real core, adapters and executor through `src/main/backend.ts`. Browser demo mode is explicit and in memory.
+The renderer receives only `dispatch`, `subscribe`, one native folder picker, `chooseDirectory()`, and `loadAppearance()`/`saveAppearance()` for display preferences (see below). It has no core, provider, executor, Python, Node, filesystem, or identity API. The production executable wires the real core, adapters and executor through `src/main/backend.ts`. Browser demo mode is explicit and in memory.
 
 ## Run and build
 
@@ -87,11 +87,31 @@ import { createMockTransport, type MockTransportOptions } from '@your-bot/deskto
 - `createDesktopHost` accepts `version: 1` and `version: 2` command frames. Both go through the same sender/frame/origin checks, the 1 MiB / depth-24 / prototype-key bounds and strict (`z.strictObject`) schemas; `parseAnyCommand` selects the schema by `version`, `parseCommand` stays the v1-only parser. Identity fields (`principal`, `principalId`, `ownerId`, `deviceId`, …) are rejected by the schemas. Valid frames go to `gateway.dispatch(command, principal)` with the principal created by main (it now also holds `mcp.call`). The gateway factory may return a v1 `DesktopGateway` or a `DesktopGatewayV2` (use `createGatewayV2` from `@your-bot/core` for v2).
 - Main subscribes with `{ contractVersion: 2 }`. Events for other principals are dropped. Snapshot results/events/`bot.updated` are scrubbed again before reaching the renderer: provider `apiKey`s are removed and MCP `env`/`headers` values are blanked (keys kept) even if a gateway forgot to.
 - `notification` events show a native Electron `Notification` while the window is not focused (control characters stripped, title ≤ 120, body ≤ 300 characters). Clicking restores and focuses the window. The event is still delivered to the renderer.
-- `chooseDirectory(): Promise<string | undefined>` is the only addition to the preload API. It invokes `your-bot:choose-directory`; main checks the sender like every other call, ignores any argument, shows a folder-only `dialog.showOpenDialog` (one at a time) and returns just the chosen path (or `undefined`). Everything else (file reads, spawning, settings) stays impossible from the renderer; the path only becomes meaningful when sent back as an ordinary, validated bot command that core re-validates (`INVALID_WORKSPACE`, trusted rules, canonicalization).
+- `chooseDirectory(): Promise<string | undefined>` invokes the native folder picker. It invokes `your-bot:choose-directory`; main checks the sender like every other call, ignores any argument, shows a folder-only `dialog.showOpenDialog` (one at a time) and returns just the chosen path (or `undefined`). Everything else (file reads, spawning, settings) stays impossible from the renderer; the path only becomes meaningful when sent back as an ordinary, validated bot command that core re-validates (`INVALID_WORKSPACE`, trusted rules, canonicalization).
+- `loadAppearance()` / `saveAppearance(prefs)` (`your-bot:appearance-load` / `-save`) keep display preferences across restarts, because the renderer's Chromium session is ephemeral. The only accepted value is the exact object `{ colorMode: 'system'|'light'|'dark', theme: 'seasonal'|'spring'|'summer'|'autumn'|'winter'|'classic', backgroundArt: boolean }` (`src/shared/appearance.ts`). Preload and main both reject anything else, and main writes it atomically to `appearance.json` in the user data folder after the usual sender check. Without the bridge (browser demo, dev), the renderer uses `localStorage`.
 
 ### Screens
 
-The sidebar groups conversations by bot (a `+` per bot starts `bot.session.create`; sessions without a known bot are listed under “Other”). Sections: **Bots**, **Routines**, **Permissions**, **Notifications** (unread badge), **Devices**, plus Settings.
+The layout uses the three panes common to persistent-agent apps (modelled on Grok Bot's) so it feels familiar:
+- **Left: roster.** A `+` for a new conversation, then Search, then one row per bot: avatar, name, time of last activity and a one-line preview, with a status dot while it is working or waiting on an approval. Clicking a row continues that bot's latest conversation. The bot's conversations are listed beneath it, a `+` per bot starts `bot.session.create`, and sessions without a known bot are listed under “Other”. Sections sit at the bottom: **Bots**, **Routines**, **Permissions**, **Notifications** (unread badge), **Devices**, **Settings**, then the connection status.
+- **Centre: conversation.** Your messages are right-aligned dark bubbles; the bot's are left-aligned light bubbles. Task status shows as a centred line, and the pill composer says “Message ⟨bot⟩” and holds the agent and model pickers.
+- **Right: details** (toggle with the `»` button; hidden below 1180 px). It shows the bot's profile, agent and workspace, approvals waiting on you, and the bot's routines (green clock when active, “Paused” otherwise).
+
+#### Appearance
+
+Settings → General → Appearance has *Color mode* (Follow system / Light / Dark), *Theme* and *Background art*.
+- **Theme** defaults to **Seasonal**, which follows the calendar: spring from March, summer from June, fall from September and winter from December. The months are flipped for southern-hemisphere time zones. A season can also be pinned, or *Classic* chosen for a plain neutral look.
+- **Background art** is on by default: cherry blossoms and tulips, sun and waves, falling leaves, or pine trees and a snowman. It can be turned off and is never shown with Classic, with `prefers-contrast: more` or in forced-colors mode.
+
+The art never gets in the way of reading or using the app:
+- It sits in a layer behind the main pane with `pointer-events: none` and `aria-hidden`.
+- It is faded as one group, and every shape uses one of the palette's three art colours.
+- Bubbles, the composer, cards, dialogs, the sidebar and the details panel are opaque.
+- `tests/appearance.test.ts` checks every light and dark palette for 4.5:1 contrast:
+  - body and secondary text on every surface;
+  - text and accents over the canvas with each art colour blended in;
+  - accent, inverse, status-badge and avatar colours.
+- It also checks focus rings for 3:1 contrast.
 
 - **Bots**: cards with Start session / Edit / Memory / Delete. The editor covers name, instructions, agent and model (from `snapshot.agents`), workspace via **Browse…** (native picker; plain text field when the transport has no picker), profile strict/trusted, MCP servers, skills, memory toggle and compaction policy. Choosing *trusted* shows a warning that the installed agent runs uncontained with your user's rights and network (file, terminal and permission requests still go through approvals), requires a workspace, and requires ticking “I understand”. The MCP editor supports stdio and HTTP servers and the **Add browser automation** preset (`preset: 'browser'`, placeholder `command: 'npx'`; the host expands it). `env`/`headers` values are secrets: stored keys show a blank, masked value (blank means unchanged and is sent as `""`), new keys take a value. Create sends `bot.create` without unset optional fields; edit sends a minimal `bot.update` patch where `null` clears `modelId`, `workspace` and `compaction`; nothing is sent when nothing changed.
 - **Memory** (per bot): list, add, delete (`memory.list/add/delete`, live `memory.updated`).
@@ -112,8 +132,8 @@ The sidebar groups conversations by bot (a `+` per bot starts `bot.session.creat
 
 ## Security and gateway expectations
 
-- Preload is bundled CommonJS, compatible with `sandbox: true`. `window.yourBot` exposes exactly `dispatch(command)`, `subscribe(listener)` and `chooseDirectory()`, never raw IPC or the Electron event argument.
-- Main checks the exact WebContents, main frame and expected URL for each IPC call (dispatch and chooseDirectory alike). It validates every command against strict v1 or v2 schemas (selected by the frame's `version`, mirroring core's v2 validation), rejects extra identity/scope fields and prototype keys, bounds payload size/depth and concurrent dispatches, and binds identity itself.
+- Preload is bundled CommonJS, compatible with `sandbox: true`. `window.yourBot` exposes exactly `dispatch(command)`, `subscribe(listener)`, `chooseDirectory()`, `loadAppearance()` and `saveAppearance(prefs)`, never raw IPC or the Electron event argument.
+- Main checks the exact WebContents, main frame and expected URL for each IPC call (dispatch, chooseDirectory and the appearance calls alike). It validates every command against strict v1 or v2 schemas (selected by the frame's `version`, mirroring core's v2 validation), rejects extra identity/scope fields and prototype keys, bounds payload size/depth and concurrent dispatches, and binds identity itself.
 - Production CSP denies all network connections, inline scripts/styles, frames, plugins and form submission. Main additionally restricts asset requests to the renderer directory, blocks navigation and redirects, rejects popup/webview creation, and denies browser permissions. Development relaxations are limited to an explicitly configured loopback Vite origin; packaged builds reject development URLs.
 - All `ProviderConfig.apiKey` values are removed from outgoing command snapshots and snapshot events, without mutating gateway storage. Settings accepts newly entered keys in a password field, never reads stored keys back, preserves an existing key when omitted, and offers explicit removal. Core keeps credentials in its protected local SQLite store; storage is not encrypted at rest.
 - The gateway owns command deduplication, sessions, message persistence, endpoint validation, credential storage, actual model discovery, task cancellation, tool containment and permission authorization. It must send principal-scoped monotonic events and coherent snapshots. UI permission decisions carry only `requestId/outcome/scope` and cannot change the requested paths, packages or operation.

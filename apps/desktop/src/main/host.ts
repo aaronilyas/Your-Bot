@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, type IpcMainInvokeEvent } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { dirname, resolve, relative, isAbsolute } from 'node:path';
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AnyCommandResult, DesktopGateway, DesktopGatewayV2, OwnerNotification, PrincipalV2 } from '@your-bot/contracts';
 import { IPC } from '../shared/ipc';
+import { parseAppearance, type AppearancePrefs } from '../shared/appearance';
 import { parseAnyCommand, trustedRendererURL, validateDevelopmentURL, rendererCSP, redactResult, rendererEvent } from './security';
 export interface GatewayFactoryContext {
   /** Host-authenticated local identity. Never supplied by the renderer. */
@@ -114,6 +116,26 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return typeof chosen === 'string' && chosen.length > 0 && chosen.length <= 4096 ? chosen : undefined;
     } finally { choosing = false; }
   });
+  // Display preferences (colour mode, theme, background art). The renderer session is ephemeral, so they live in a
+  // small file in the host's data folder. Only an exact, validated preferences object is ever read or written.
+  const appearanceFile = join(app.getPath('userData'), 'appearance.json');
+  let appearanceWrite: Promise<unknown> = Promise.resolve();
+  ipcMain.handle(IPC.loadAppearance, async (event): Promise<AppearancePrefs | undefined> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    try { return parseAppearance(JSON.parse(await readFile(appearanceFile, 'utf8'))); } catch { return undefined; }
+  });
+  ipcMain.handle(IPC.saveAppearance, async (event, value: unknown): Promise<boolean> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    const prefs = parseAppearance(value);
+    if (!prefs || closed) return false;
+    const write = appearanceWrite.then(async () => {
+      const temporary = `${appearanceFile}.${randomUUID()}.tmp`;
+      await writeFile(temporary, JSON.stringify(prefs), { mode: 0o600 });
+      await rename(temporary, appearanceFile);
+    });
+    appearanceWrite = write.catch(() => {});
+    try { await write; return true; } catch { return false; }
+  });
   let unsubscribe = () => {};
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -123,6 +145,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     closing = Promise.resolve().then(async () => {
       ipcMain.removeHandler(IPC.dispatch);
       ipcMain.removeHandler(IPC.chooseDirectory);
+      ipcMain.removeHandler(IPC.loadAppearance);
+      ipcMain.removeHandler(IPC.saveAppearance);
       unsubscribe();
       if (!window.isDestroyed()) window.destroy();
       await gateway.close();

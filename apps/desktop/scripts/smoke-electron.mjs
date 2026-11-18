@@ -14,17 +14,24 @@ async function validateHost() { try {
   assert.equal(preferences.sandbox, true); assert.equal(preferences.contextIsolation, true); assert.equal(preferences.nodeIntegration, false);
   const result = await host.window.webContents.executeJavaScript(`(async () => {
     const transport = window.yourBot;
+    const violations = [];
+    document.addEventListener('securitypolicyviolation', event => violations.push(event.violatedDirective));
     const snapshot = await transport.dispatch({version:1,id:'smoke-sync',type:'state.sync'});
     const forged = await transport.dispatch({version:1,id:'smoke-forge',type:'state.sync',principalId:'admin'});
     await new Promise(resolve => setTimeout(resolve, 500));
-    return { keys: Object.keys(transport).sort(), node: typeof require, snapshot, forged, title: document.title, text: document.body.innerText, csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content };
+    const stored = await transport.loadAppearance();
+    const root = document.documentElement;
+    return { keys: Object.keys(transport).sort(), node: typeof require, snapshot, forged, title: document.title, text: document.body.innerText, csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content,
+      look: root.dataset.look, mode: root.dataset.mode, canvas: root.style.getPropertyValue('--canvas').trim(), storedType: stored === undefined ? 'undefined' : typeof stored, violations };
   })()`);
-  assert.deepEqual(result.keys, ['chooseDirectory', 'dispatch', 'subscribe']); assert.equal(result.node, 'undefined');
+  assert.deepEqual(result.keys, ['chooseDirectory', 'dispatch', 'loadAppearance', 'saveAppearance', 'subscribe']);
+  assert.match(result.look, /^(spring|summer|autumn|winter|classic)$/); assert.match(result.mode, /^(light|dark)$/); assert.match(result.canvas, /^#[0-9a-f]{6}$/);
+  assert.match(result.storedType, /^(undefined|object)$/); assert.deepEqual(result.violations, []); assert.equal(result.node, 'undefined');
   assert.equal(result.snapshot.snapshot.settings.providers[0].apiKey, undefined);
   assert.equal(result.forged.ok, false); assert.equal(result.forged.error.code, 'INVALID_COMMAND');
   assert.equal(result.title, 'Your Bot'); assert.match(result.text, /Where shall we begin/); assert.match(result.text, /Backend connected/);
   assert.match(result.csp, /connect-src 'none'/);
-  console.log('DESKTOP_SMOKE_OK: packaged renderer, sandbox preload, identity binding, credential redaction, command rejection, CSP');
+  console.log('DESKTOP_SMOKE_OK: packaged renderer, sandbox preload, identity binding, credential redaction, command rejection, CSP, appearance');
   await host.close(); clearTimeout(watchdog); app.exit(0);
 } catch (error) { console.error(error); if (host) await host.close(); clearTimeout(watchdog); app.exit(1); } }
 void app.whenReady().then(validateHost);

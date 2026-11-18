@@ -21,7 +21,7 @@ describe('conversation UI', () => {
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     await screen.findByText(/Let’s make this concrete/);
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop response' })).toBeNull(), { timeout: 5000 });
-    expect(screen.getAllByText(/Let’s make this concrete/)).toHaveLength(1);
+    expect(within(screen.getByRole('log', { name: 'Messages' })).getAllByText(/Let’s make this concrete/)).toHaveLength(1);
     expect(dispatch.mock.calls.some(([command]) => command.type === 'session.selectAgent' && command.agentId === 'acp-demo')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'A fresh perspective' }));
     await screen.findByText(/Hello. I’m Your Bot/);
@@ -54,7 +54,8 @@ describe('conversation UI', () => {
   it('edits and saves endpoints through transport without exposing credentials', async () => {
     const { user, dispatch } = setup(); await screen.findByText('Browser demo');
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Provider settings' });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Providers' }));
     await user.clear(within(dialog).getByLabelText('Endpoint'));
     await user.type(within(dialog).getByLabelText('Endpoint'), 'http://127.0.0.1:8080/v1');
     await user.click(within(dialog).getByRole('button', { name: 'Save settings' }));

@@ -8,6 +8,7 @@ const fake = vi.hoisted(() => ({
   notifications: [] as { options: any; show: ReturnType<typeof vi.fn>; click?: () => void }[],
   openDialog: vi.fn(),
   appListeners: new Map<string, (...args: any[]) => void>(),
+  userData: '/host/data',
 }));
 vi.mock('electron', () => {
   class Window {
@@ -31,12 +32,15 @@ vi.mock('electron', () => {
     on(name: string, fn: () => void) { this.handlers[name] = fn; if (name === 'click') (this as any).click = fn; }
   }
   return {
-    app: { whenReady: async () => {}, isPackaged: false, getPath: () => '/host/data', on: (name: string, fn: any) => fake.appListeners.set(name, fn), removeListener: (name: string) => fake.appListeners.delete(name), quit: vi.fn(), exit: vi.fn() },
+    app: { whenReady: async () => {}, isPackaged: false, getPath: () => fake.userData, on: (name: string, fn: any) => fake.appListeners.set(name, fn), removeListener: (name: string) => fake.appListeners.delete(name), quit: vi.fn(), exit: vi.fn() },
     BrowserWindow: Window, Notification, dialog: { showOpenDialog: fake.openDialog }, Menu: { setApplicationMenu: vi.fn() },
     ipcMain: { handle: (channel: string, handler: any) => fake.handlers.set(channel, handler), removeHandler: (channel: string) => fake.handlers.delete(channel) },
     session: { fromPartition: () => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onHeadersReceived: vi.fn(), onBeforeRequest: vi.fn() } }) },
   };
 });
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createDesktopHost } from '../src/main/host';
 import { IPC } from '../src/shared/ipc';
 beforeEach(() => { fake.handlers.clear(); fake.appListeners.clear(); fake.notifications.length = 0; fake.focused = false; fake.openDialog.mockReset(); });
@@ -118,6 +122,32 @@ describe('v2 IPC host', () => {
     emit({ ...event, sequence: 3, principalId: 'someone-else' });
     expect(fake.notifications).toHaveLength(1);
     await host.close();
+  });
+});
+
+describe('appearance preferences', () => {
+  it('stores only exact preferences in the data folder and refuses untrusted frames', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'your-bot-appearance-'));
+    fake.userData = folder;
+    try {
+      const { gateway } = setup();
+      const host = await createDesktopHost({ gatewayFactory: () => gateway });
+      const load = fake.handlers.get(IPC.loadAppearance)!, save = fake.handlers.get(IPC.saveAppearance)!;
+      expect(await load(valid())).toBeUndefined();
+      const prefs = { colorMode: 'light', theme: 'autumn', backgroundArt: false };
+      expect(await save(valid(), prefs)).toBe(true);
+      expect(JSON.parse(await readFile(join(folder, 'appearance.json'), 'utf8'))).toEqual(prefs);
+      expect(await load(valid())).toEqual(prefs);
+      for (const odd of [undefined, 'x', { ...prefs, theme: 'neon' }, { ...prefs, extra: true }]) expect(await save(valid(), odd)).toBe(false);
+      expect(await load(valid())).toEqual(prefs);
+      await expect(save({ ...valid(), sender: {} }, prefs)).rejects.toThrow('Untrusted');
+      await expect(load({ ...valid(), sender: {} })).rejects.toThrow('Untrusted');
+      await writeFile(join(folder, 'appearance.json'), '{"colorMode":"dark","theme":"winter","backgroundArt":true,"x":1}');
+      expect(await load(valid())).toBeUndefined();
+      await host.close();
+      expect(fake.handlers.has(IPC.loadAppearance)).toBe(false);
+      expect(fake.handlers.has(IPC.saveAppearance)).toBe(false);
+    } finally { fake.userData = '/host/data'; await rm(folder, { recursive: true, force: true }); }
   });
 });
 
