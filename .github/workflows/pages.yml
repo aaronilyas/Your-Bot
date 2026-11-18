@@ -1,0 +1,59 @@
+name: Download site
+
+# Publishes site/ to GitHub Pages (https://ysybot.com). It redeploys whenever a release is
+# published, so the page's release.json always lists the latest installers.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'scripts/install.sh'
+      - '.github/workflows/pages.yml'
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _site
+          cp -r site/. _site/
+          # `curl -fsSL https://ysybot.com/install.sh | sh` serves the same script as the release.
+          cp scripts/install.sh _site/install.sh
+          # Snapshot of the latest published release for the page (null when there is none yet).
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            --jq '{tag_name, name, published_at, html_url, assets: [.assets[] | {name, size, browser_download_url}]}' \
+            > _site/release.json || echo 'null' > _site/release.json
+          cat _site/release.json
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
