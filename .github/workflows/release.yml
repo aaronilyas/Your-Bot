@@ -20,7 +20,7 @@ jobs:
             os: ubuntu-24.04
             script: package:linux
           - name: macOS (dmg, zip — Intel + Apple Silicon)
-            os: macos-14
+            os: macos-latest
             script: package:mac
           - name: Windows (NSIS installer, zip)
             os: windows-latest
