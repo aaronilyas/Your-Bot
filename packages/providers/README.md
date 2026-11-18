@@ -1,0 +1,11 @@
+# @your-bot/providers
+
+Finds the agent CLIs and local model servers on this machine and turns them into Your Bot providers, so nobody has to type commands, ACP arguments or environment variable names by hand. Modeled on T3 Code's provider maintenance.
+
+- **Find**: `scanAgentClis` / `scanProviders` look for each catalog CLI (Claude Code, Codex, Grok Build, Gemini CLI, OpenCode, Cursor Agent, GitHub Copilot CLI, Qwen Code, Kiro CLI) on the PATH your login shell builds (`$SHELL -ilc`) plus the usual per-user folders (mise, asdf, bun, Volta, npm, Homebrew, `~/.local/bin`). They read the version, run the CLI's own sign-in status command where it has one, and compare against the latest npm release. Probes run with mise auto-install turned off and never change anything.
+- **Connect**: `linkProviders` / `providerFor` build a host-launched ACP provider (`launch: 'host'`), using the CLI's own ACP mode (`grok agent stdio`, `opencode acp`, `cursor-agent acp`, `copilot --acp`, `qwen --acp`, `gemini --experimental-acp`, `kiro-cli acp`) or an adapter run through npx and pinned to its newest release (`@agentclientprotocol/claude-agent-acp`, `@zed-industries/codex-acp`). A provider that already points at the same CLI keeps its id, so bots stay attached. Running LM Studio, Ollama and llama.cpp servers are linked as OpenAI-compatible providers.
+- **Update**: `updateAgentCli` picks the command from how the CLI was installed: `mise upgrade`, `npm install -g --prefix <prefix> <pkg>@latest`, `bun`, `pnpm`, `volta`, `brew upgrade [--cask]`, or the CLI's own updater (`claude update`, `codex update`, `grok update`, ...). Nix and MacPorts installs are reported as manual.
+- **Sign in**: `loginTarget` + `openInTerminal` open the CLI's interactive sign-in (`claude auth login`, `codex login`, `grok login`, ...) in a terminal window. The `your-bot providers login` command runs it in the current terminal.
+- `hydrateProcessPath` puts the login-shell PATH into a GUI process so host-launched agents (and the `node` their shims need) resolve as in a terminal.
+
+The desktop app uses it in Settings → Providers → *Agents on this computer*. The `your-bot providers list|link|update|login` CLI uses it too.

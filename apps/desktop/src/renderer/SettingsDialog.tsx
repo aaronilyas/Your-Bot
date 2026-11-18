@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { AppSettingsV2, ProviderConfigV2 } from '@your-bot/contracts';
 import type { DesktopStore } from './store';
 import { Icon, Modal } from './ui';
+import { AgentsPanel } from './AgentsPanel';
 import { SEASON_LABELS, lookFor, type Appearance } from './appearance';
 import type { ColorMode, ThemeChoice } from '../shared/appearance';
 
@@ -29,6 +30,8 @@ export function SettingsDialog({ settings, store, appearance, onClose }: { setti
   const [error, setError] = useState<string>();
   /** Text being typed into list fields; parsed on every change but displayed verbatim so newlines and commas survive. */
   const [typed, setTyped] = useState<Record<string, string>>({});
+  /** After a connect, bring just the linked providers into the local copy (keys stripped); unsaved edits to other providers survive, so Save cannot overwrite the new link. */
+  const adopt = (ids: string[]) => { const latest = store.getState().snapshot.settings.providers; setProviders(current => { let next = current; for (const id of ids) { const fresh = latest.find(provider => provider.id === id); if (!fresh) continue; const { apiKey: _secret, ...clean } = structuredClone(fresh); next = next.some(provider => provider.id === id) ? next.map(provider => provider.id === id ? clean : provider) : [...next, clean]; } return next; }); };
   const patch = (id: string, values: Partial<ProviderConfigV2>) => setProviders(current => current.map(provider => provider.id === id ? { ...provider, ...values } : provider));
   async function save(event: FormEvent) {
     event.preventDefault(); setError(undefined);
@@ -54,7 +57,7 @@ export function SettingsDialog({ settings, store, appearance, onClose }: { setti
   return <Modal title="Settings" onClose={onClose} wide><div className="settings-layout">
     <div className="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">{TABS.map(item => <button key={item.id} role="tab" id={`settings-tab-${item.id}`} aria-selected={tab === item.id} aria-controls={`settings-panel-${item.id}`} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><Icon name={item.icon} size={15} />{item.label}</button>)}</div>
     <div className="settings-content" role="tabpanel" id={`settings-panel-${tab}`} aria-labelledby={`settings-tab-${tab}`}>
-    {tab === 'general' ? <GeneralSettings appearance={appearance} /> : <><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
+    {tab === 'general' ? <GeneralSettings appearance={appearance} /> : <>{store.providers && <AgentsPanel api={store.providers} store={store} onLinked={adopt} />}<h3 className="settings-group-title">Manual setup</h3><p className="help">Connect your local models or an OpenAI-compatible endpoint. Requests run through your backend.</p>
     <form onSubmit={event => void save(event)}><div className="provider-list">{providers.map((provider, index) => <fieldset className="provider" key={provider.id} disabled={saving}><legend>Provider {index + 1}</legend><div className="provider-top"><label>Name<input value={provider.name} onChange={e => patch(provider.id, { name: e.target.value })} /></label><label className="toggle"><input type="checkbox" checked={provider.enabled} onChange={e => patch(provider.id, { enabled: e.target.checked })} />Enabled</label><button type="button" className="icon-button" aria-label={`Remove ${provider.name}`} onClick={() => setProviders(current => current.filter(p => p.id !== provider.id))}><Icon name="trash" /></button></div>
       <div className="provider-grid"><label>Provider type<select value={provider.kind} onChange={e => { const kind = e.target.value as ProviderConfigV2['kind']; patch(provider.id, { kind, launch: undefined, envPassthrough: undefined, ...(kind === 'acp' ? { command: '/usr/bin/node', args: [''] } : { endpoint: kind === 'lmstudio' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:8080/v1' }) }); }}><option value="acp">ACP agent</option><option value="lmstudio">LM Studio</option><option value="llamacpp">llama.cpp</option><option value="openai-compatible">OpenAI compatible</option></select></label><label>Model ID (optional)<input value={provider.modelId ?? ''} placeholder="Discovered automatically" onChange={e => patch(provider.id, { modelId: e.target.value || undefined })} /></label></div>
       {provider.kind === 'acp' ? <>
