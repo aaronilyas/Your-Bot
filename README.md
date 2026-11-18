@@ -41,6 +41,8 @@ Pushing a `v*` tag runs [.github/workflows/release.yml](.github/workflows/releas
 | macOS 12+ | `.dmg`, `.zip` | Intel (x64), Apple Silicon (arm64) |
 | Windows 10/11 | `Your-Bot-Setup-<v>.exe` (selects the architecture itself), per-arch setup `.exe`, portable `.zip` | x64, arm64 |
 
+End users can download from **[ysybot.com](https://ysybot.com)**. That page is `site/`, deployed to GitHub Pages by [.github/workflows/pages.yml](.github/workflows/pages.yml). It redeploys whenever a release is published, and it lists that release's installers.
+
 On Linux, one command picks the right package for the distro and also installs the strict-profile prerequisites (Python 3 + venv, bubblewrap, gcc):
 
 ```sh
