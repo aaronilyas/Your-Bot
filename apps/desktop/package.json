@@ -47,6 +47,8 @@
     "@your-bot/contracts": "*",
     "@your-bot/core": "0.1.0",
     "@your-bot/executor": "0.1.0",
+    "@your-bot/host": "0.1.0",
+    "@your-bot/providers": "0.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^4.3.6"

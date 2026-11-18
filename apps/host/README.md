@@ -15,9 +15,23 @@ your-bot-host routine create --data <dir> --bot <id> --name <name> --prompt <tex
 your-bot-host approvals --data <dir>
 your-bot-host approve --data <dir> <requestId> [--deny] [--scope once|task|standing] [--folder <dir>] [--prefix <arg>]... [--mcp-server <id>] [--mcp-tool <name>] [--agent-tool-kind <kind>] [--expires <iso>]
 your-bot-host watch --data <dir>
+your-bot-host providers list [--data <dir>] [--json] [--no-updates] [--no-auth]
+your-bot-host providers link --data <dir> [<id>...] [--all]
+your-bot-host providers update [<id>...] [--all]
+your-bot-host providers login <id>
 ```
 
 `--data` falls back to `YOUR_BOT_DATA`. Exit 0 on success, 1 on a command or connection error, 2 on usage.
+
+`providers list` scans agent CLIs and local model servers on this machine (`@your-bot/providers`). When the owner control socket accepts the token it annotates each row from the live settings; otherwise nothing is marked linked. Human output is one line per installed agent (name, version, install label, auth, update, link), then running local servers, then `Not installed:` with each install command. `--json` prints the `ProviderScan` object. `--no-updates` skips the npm registry; `--no-auth` skips sign-in probes.
+
+`providers link` needs a running desktop app or `your-bot-host run`. It reads settings, links the named catalog ids (or `--all`), saves them with `settings.update`, and runs `models.refresh`. Each line is `created <name> (<provider id>)`, `refreshed <name> (<provider id>)`, or `skipped <id>: <reason>`. Exit 1 when nothing was linked and something was skipped. A `SETTINGS_BUSY` result says to wait until the running task finishes. If Your Bot is not running the command prints: Your Bot is not running. Open the app (or `your-bot-host run`) and try again.
+
+`providers update` does not need the app. It streams the updater's output. `--all` updates every installed agent whose scan reports `updateAvailable`, or prints `Everything is up to date.` After a successful update of an npx-adapter agent that is already linked, the CLI re-links it so the ACP adapter version is pinned again. That step is skipped when the app is not running.
+
+`providers login <id>` runs that agent's sign-in in the current terminal (stdio inherited, no shell) and exits with its status. On Windows, `.cmd` and `.bat` shims are started through `cmd.exe /d /s /c`.
+
+The desktop build installs the same commands as `your-bot` (`~/.local/bin` on Linux and macOS, the user Path on Windows). `@your-bot/host` also exports `runCli`, `startControlServer`, `ensureControlToken`, `readControlToken`, `tokenPath` and `controlEndpoint` for that app.
 
 `init` creates the 0700 data directory (see `@your-bot/runtime`) and `<data>/control.token` (0600, 32 random bytes, base64url). An existing token is kept. `run` refuses to start when that file is missing.
 

@@ -3,6 +3,7 @@ import type {
   Routine, RoutineRun, SessionV2, StandingGrant, StandingGrantScope,
 } from '@your-bot/contracts';
 import type { DesktopTransport } from '../renderer/store';
+import type { AgentRowInfo, ProvidersApi } from '../shared/ipc';
 
 export interface MockTransportOptions { chunkDelayMs?: number; permissionDemo?: boolean; }
 
@@ -310,8 +311,37 @@ export function createMockTransport(options: MockTransportOptions = {}): Desktop
     results.set(command.id, clone(result)); if (results.size > 500) results.delete(results.keys().next().value!);
     return result;
   };
+  // Simulated provider detection: fictional agents, nothing is run or read from this computer.
+  const fakeAgents: AgentRowInfo[] = [
+    { id: 'claude', name: 'Claude Code', installed: true, version: '2.1.0', latestVersion: '2.2.0', updateAvailable: true, install: { kind: 'npm', label: 'npm (claude)' }, update: { command: 'npm install -g @anthropic-ai/claude-code' }, auth: 'signed-in', providerId: 'agent-claude', linked: false, installHint: 'npm install -g @anthropic-ai/claude-code', docs: 'https://docs.claude.com/claude-code' },
+    { id: 'codex', name: 'Codex', installed: true, version: '0.9.0', install: { kind: 'brew', label: 'Homebrew (codex)' }, update: { manual: 'Update with: brew upgrade codex' }, auth: 'signed-out', login: 'codex login', providerId: 'agent-codex', linked: false, installHint: 'npm install -g @openai/codex', docs: 'https://github.com/openai/codex' },
+    { id: 'grok', name: 'Grok Build', installed: false, auth: 'unknown', providerId: 'agent-grok', linked: false, installHint: 'curl -fsSL https://x.ai/cli/install.sh | bash', docs: 'https://docs.x.ai' },
+  ];
+  const providers: ProvidersApi = {
+    async scan() {
+      const ids = new Set(snapshot.settings.providers.map(provider => provider.id));
+      return clone({ agents: fakeAgents.map(agent => ({ ...agent, linked: ids.has(agent.providerId) })), servers: [{ id: 'ollama', name: 'Ollama', endpoint: 'http://127.0.0.1:11434/v1', running: true, models: ['llama3'], providerId: 'local-ollama', linked: ids.has('local-ollama') }] });
+    },
+    async link(targets) {
+      const wanted = targets === 'all' ? ['claude', 'codex', 'ollama'] : targets;
+      const linked: { id: string; name: string; providerId: string; created: boolean }[] = [];
+      for (const id of wanted) {
+        const agent = fakeAgents.find(entry => entry.id === id && entry.installed);
+        const providerId = agent?.providerId ?? (id === 'ollama' ? 'local-ollama' : undefined);
+        if (!providerId) continue;
+        const created = !snapshot.settings.providers.some(provider => provider.id === providerId);
+        if (created) snapshot.settings.providers.push(agent ? { id: providerId, name: agent.name, kind: 'acp', launch: 'host', command: agent.id, args: [], enabled: true } : { id: providerId, name: 'Ollama', kind: 'openai-compatible', endpoint: 'http://127.0.0.1:11434/v1', enabled: true });
+        linked.push({ id, name: agent?.name ?? 'Ollama', providerId, created });
+      }
+      if (linked.length) emit({ type: 'state.snapshot', snapshot: { ...clone(snapshot), lastSequence: snapshot.lastSequence + 1 } });
+      return { linked, skipped: [] };
+    },
+    async update(id) { const agent = fakeAgents.find(entry => entry.id === id); if (agent) { agent.updateAvailable = false; agent.version = agent.latestVersion ?? agent.version; } return { ok: !!agent, message: agent ? `${agent.name} updated (simulated).` : 'Unknown agent', output: 'simulated update\nnothing was installed' }; },
+    async login(id) { const agent = fakeAgents.find(entry => entry.id === id); if (agent) agent.auth = 'signed-in'; return { ok: true }; },
+  };
   return {
     dispatch,
+    providers,
     subscribe(listener) { if (closed) throw new Error('Demo transport is closed'); listeners.add(listener); return () => { listeners.delete(listener); }; },
     /** Simulated: nothing is read from disk; a fixed fictional path is returned. */
     async chooseDirectory() { return closed ? undefined : '/demo/workspace'; },

@@ -38,6 +38,19 @@ vi.mock('electron', () => {
     session: { fromPartition: () => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onHeadersReceived: vi.fn(), onBeforeRequest: vi.fn() } }) },
   };
 });
+const prov = vi.hoisted(() => ({
+  scanProviders: vi.fn(async (_providers: unknown) => ({ agents: [], servers: [] })),
+  linkProviders: vi.fn(async (settings: any, _targets: unknown) => ({ settings, linked: [] as any[], skipped: [] as any[] })),
+  updateAgentCli: vi.fn(async (_id: string) => ({ ok: true, message: 'updated', output: '' })),
+  loginTarget: vi.fn(async (id: string) => ({ plan: { command: id }, name: id })),
+  openInTerminal: vi.fn(async (_target: unknown) => {}),
+}));
+vi.mock('@your-bot/providers', () => ({
+  ...prov,
+  AGENT_CLIS: [{ id: 'claude' }, { id: 'grok' }], LOCAL_SERVERS: [{ id: 'ollama' }],
+  agentSpec: (id: string) => ({ claude: { acp: { via: 'npx' } }, grok: { acp: { via: 'self' } } } as Record<string, unknown>)[id],
+  linkedProvider: (providers: { id: string }[], _spec: unknown) => providers.find(provider => provider.id === 'agent-claude'),
+}));
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -176,6 +189,60 @@ describe('chooseDirectory', () => {
     expect(await choose(valid())).toBeUndefined();
     finish({ canceled: false, filePaths: ['/a'] });
     expect(await first).toBe('/a');
+    await host.close();
+  });
+});
+
+describe('provider detection IPC', () => {
+  const call = (channel: string, value?: unknown, event: unknown = valid()) => fake.handlers.get(channel)!(event, value) as Promise<any>;
+  const withSettings = (setup_: ReturnType<typeof setup>, providers: unknown[] = []) => setup_.dispatch.mockImplementation(async (command: AnyDesktopCommand) => ({ ok: true as const, commandId: command.id, snapshot: { ...emptySnapshot(), settings: { providers: providers as never } } }));
+  beforeEach(() => Object.values(prov).forEach(fn => fn.mockClear()));
+  it('rejects untrusted senders and removes the handlers on close', async () => {
+    const s = setup(); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    for (const channel of [IPC.providersScan, IPC.providersLink, IPC.providersUpdate, IPC.providersLogin]) await expect(call(channel, 'claude', { sender: {} })).rejects.toThrow('Untrusted');
+    await host.close();
+    for (const channel of [IPC.providersScan, IPC.providersLink, IPC.providersUpdate, IPC.providersLogin]) expect(fake.handlers.has(channel)).toBe(false);
+  });
+  it('scans with the providers from the current settings', async () => {
+    const s = setup(); withSettings(s, [{ id: 'p' }]); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    expect(await call(IPC.providersScan)).toEqual({ agents: [], servers: [] });
+    expect(prov.scanProviders).toHaveBeenCalledWith([{ id: 'p' }]);
+    await host.close();
+  });
+  it('links only known ids, saves settings and refreshes models; surfaces busy settings', async () => {
+    const s = setup(); withSettings(s); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    for (const bad of ['claude', ['claude', '/bin/sh'], ['x'.repeat(10)], Array(33).fill('claude'), { command: 'x' }, undefined]) await expect(call(IPC.providersLink, bad)).rejects.toThrow('Unknown');
+    expect(prov.linkProviders).not.toHaveBeenCalled();
+    prov.linkProviders.mockResolvedValueOnce({ settings: { providers: [{ id: 'agent-claude' }] } as never, linked: [{ id: 'claude', name: 'Claude Code', providerId: 'agent-claude', created: true }], skipped: [] });
+    expect(await call(IPC.providersLink, ['claude'])).toMatchObject({ linked: [{ id: 'claude' }] });
+    const types = s.dispatch.mock.calls.map(([command]) => command.type);
+    expect(types).toEqual(['state.sync', 'settings.update', 'models.refresh']);
+    expect(s.dispatch.mock.calls[1][0]).toMatchObject({ settings: { providers: [{ id: 'agent-claude' }] } });
+    prov.linkProviders.mockResolvedValueOnce({ settings: { providers: [] } as never, linked: [{ id: 'grok', name: 'Grok', providerId: 'agent-grok', created: true }], skipped: [] });
+    s.dispatch.mockImplementation(async (command: AnyDesktopCommand) => command.type === 'settings.update' ? { ok: false as const, commandId: command.id, error: { code: 'SETTINGS_BUSY', message: 'busy' } } : { ok: true as const, commandId: command.id, snapshot: emptySnapshot() });
+    const busy = await call(IPC.providersLink, 'all');
+    expect(busy.linked).toEqual([]); expect(busy.error).toMatch(/while a task is running/);
+    await host.close();
+  });
+  it('updates by id, truncates output, and re-links npx adapters that are already connected', async () => {
+    const s = setup(); withSettings(s, [{ id: 'agent-claude' }]); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    await expect(call(IPC.providersUpdate, 'rm -rf')).rejects.toThrow('Unknown agent');
+    prov.updateAgentCli.mockResolvedValueOnce({ ok: true, message: 'ok', output: 'a'.repeat(20000) + 'END' });
+    const result = await call(IPC.providersUpdate, 'claude');
+    expect(result.output).toHaveLength(8192); expect(result.output.endsWith('END')).toBe(true);
+    expect(prov.linkProviders).toHaveBeenCalledWith(expect.anything(), ['claude']);
+    prov.linkProviders.mockClear();
+    await call(IPC.providersUpdate, 'grok');
+    expect(prov.linkProviders).not.toHaveBeenCalled();
+    await host.close();
+  });
+  it('opens sign-in in a terminal and reports failures as a message', async () => {
+    const s = setup(); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    await expect(call(IPC.providersLogin, { id: 'claude' })).rejects.toThrow('Unknown agent');
+    expect(await call(IPC.providersLogin, 'claude')).toEqual({ ok: true });
+    expect(prov.openInTerminal).toHaveBeenCalledWith({ plan: { command: 'claude' }, name: 'claude' });
+    prov.openInTerminal.mockRejectedValueOnce(new Error('No terminal. Run: claude login'));
+    expect(await call(IPC.providersLogin, 'claude')).toEqual({ ok: false, message: 'No terminal. Run: claude login' });
     await host.close();
   });
 });

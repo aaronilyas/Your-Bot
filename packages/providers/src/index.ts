@@ -1,0 +1,17 @@
+export { AGENT_CLIS, agentSpec, npmPackageFor, providerIdFor } from './catalog.js';
+export type { AgentCliSpec, AcpLaunch, AuthProbe } from './catalog.js';
+export { agentSearchPath, hydrateProcessPath, loginShellPath, mergePath, wellKnownDirs, which } from './environment.js';
+export { detectInstallMethod, describeInstall, refineInstall, updatePlan, loginPlan } from './install.js';
+export type { InstallMethod, CommandPlan } from './install.js';
+export { scanAgentClis, latestNpmVersion } from './detect.js';
+export type { AgentCliStatus, AuthState, ScanOptions } from './detect.js';
+export { annotateLinks, linkedProvider, providerFor, withLinkedProvider } from './connect.js';
+export { updateAgentCli } from './update.js';
+export type { UpdateResult } from './update.js';
+export { loginTarget, openInTerminal } from './login.js';
+export type { LoginTarget } from './login.js';
+export { LOCAL_SERVERS, localServerProvider, scanLocalServers } from './local-servers.js';
+export type { LocalServerStatus } from './local-servers.js';
+export { compareVersions, parseVersion, run } from './process.js';
+export { scanProviders, linkProviders } from './service.js';
+export type { ProviderScan, LinkSummary, AgentRow } from './service.js';

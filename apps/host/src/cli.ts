@@ -1,20 +1,44 @@
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { BotInput, CapabilityV2, CommandResultV2, DesktopCommandV2, MissedRunPolicy, Notifier, RoutineInput, StandingGrantScope } from '@your-bot/contracts';
+import type { AppSettingsV2, BotInput, CapabilityV2, CommandResultV2, DesktopCommandV2, MissedRunPolicy, Notifier, ProviderConfigV2, RoutineInput, StandingGrantScope } from '@your-bot/contracts';
+import { agentSpec, linkProviders, linkedProvider, loginTarget, scanProviders, updateAgentCli, type AgentCliSpec, type LoginTarget, type ProviderScan } from '@your-bot/providers';
 import { createRuntime, prepareDataLayout, type RuntimeListen } from '@your-bot/runtime';
 import { connectControl, ControlClientError } from './client.js';
 import { startControlServer } from './control.js';
 import { controlEndpoint } from './endpoint.js';
 import { ensureControlToken, readControlToken, tokenPath } from './token.js';
 
+/** Talks to a running app or `your-bot-host run`. Undefined means it is not running. */
+export interface OwnerSession {
+  call(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+  close(): void;
+}
+
+/** Provider operations. Tests inject these so a run does not probe the real machine. */
+export interface ProvidersDeps {
+  scanProviders: typeof scanProviders;
+  linkProviders: typeof linkProviders;
+  updateAgentCli: typeof updateAgentCli;
+  loginTarget: typeof loginTarget;
+  agentSpec: typeof agentSpec;
+}
+
 export interface CliIO {
   env: Record<string, string | undefined>;
   stdout(line: string): void;
   stderr(line: string): void;
+  /** Raw stdout, used for update output that is not line-oriented. */
+  write?(text: string): void;
   /** Ends `run` and `watch`. */
   signal?: AbortSignal;
+  providers?: ProvidersDeps;
+  /** When omitted, connects to the owner control socket. */
+  connectOwner?(dataDir: string): Promise<OwnerSession | undefined>;
+  /** Sign-in with inherited stdio. When omitted, the login plan is spawned (`shell: false`). */
+  runLogin?(plan: LoginTarget['plan']): Promise<number>;
 }
 
-const USAGE = `Usage: your-bot-host [--data <dir>] <command>
+const USAGE_TEXT = `Usage: your-bot-host [--data <dir>] <command>
   init [--name <name>]
   run [--listen <host:port>] [--name <name>] [--agent-timeout <seconds>]
   ctl '<json v2 command>'
@@ -27,11 +51,25 @@ const USAGE = `Usage: your-bot-host [--data <dir>] <command>
   approvals
   approve <requestId> [--deny] [--scope once|task|standing] [--folder <dir>] [--prefix <arg>]... [--mcp-server <id>] [--mcp-tool <name>] [--agent-tool-kind <kind>] [--expires <iso>]
   watch
+  providers list [--json] [--no-updates] [--no-auth]
+  providers link [<id>...] [--all]
+  providers update [<id>...] [--all]
+  providers login <id>
 
 Data directory: --data or $YOUR_BOT_DATA.
+The desktop app installs this same CLI as \`your-bot\`.
+providers list scans this machine. It annotates links from the running app when the control socket answers, otherwise from no saved providers.
+providers link requires a running app (or \`your-bot-host run\`).
+providers update runs locally. providers login runs the agent's sign-in in this terminal.
 init creates the 0700 data directory and a 0600 control token (kept if it already exists).
 run stays in the foreground and opens the owner control socket. A remote listener starts only with --listen.
 The control token is read from <data>/control.token and sent as the first frame; it is never accepted as an argument.`;
+
+/** The desktop app installs this CLI as `your-bot` (it sets YOUR_BOT_CLI_NAME); headless installs call it `your-bot-host`. */
+function usageFor(env: Record<string, string | undefined>): string {
+  const name = env.YOUR_BOT_CLI_NAME === 'your-bot' ? 'your-bot' : 'your-bot-host';
+  return USAGE_TEXT.replace(/^Usage: your-bot-host/, `Usage: ${name}`);
+}
 
 const VALUE_FLAGS = new Set([
   'data', 'listen', 'name', 'agent-timeout', 'agent', 'workspace', 'profile', 'instructions', 'model', 'bot', 'capability',
@@ -39,7 +77,10 @@ const VALUE_FLAGS = new Set([
   'at', 'missed', 'session', 'max-catch-up', 'scope',
 ]);
 const REPEAT_FLAGS = new Set(['prefix']);
-const BOOLEAN_FLAGS = new Set(['help', 'deny', 'disabled', 'memory']);
+const BOOLEAN_FLAGS = new Set(['help', 'deny', 'disabled', 'memory', 'all', 'json', 'no-updates', 'no-auth']);
+
+const NOT_RUNNING = 'Your Bot is not running. Open the app (or `your-bot-host run`) and try again.';
+const SETTINGS_BUSY = 'Settings cannot change while a task is running. Wait for it to finish, then try again.';
 
 interface Parsed { positional: string[]; flags: Map<string, string | true>; repeated: Map<string, string[]>; }
 
@@ -136,9 +177,9 @@ async function ownerCall(dataDir: string, command: Record<string, unknown>): Pro
 export async function runCli(argv: string[], io: CliIO): Promise<number> {
   let args: Parsed;
   try { args = parseArgs(argv); }
-  catch (error) { io.stderr(error instanceof Error ? error.message : 'Invalid arguments'); io.stderr(USAGE); return 2; }
+  catch (error) { io.stderr(error instanceof Error ? error.message : 'Invalid arguments'); io.stderr(usageFor(io.env)); return 2; }
   if (args.flags.has('help') || args.positional.length === 0) {
-    (args.flags.has('help') ? io.stdout : io.stderr)(USAGE);
+    (args.flags.has('help') ? io.stdout : io.stderr)(usageFor(io.env));
     return args.flags.has('help') ? 0 : 2;
   }
   const [command, ...rest] = args.positional;
@@ -156,10 +197,11 @@ export async function runCli(argv: string[], io: CliIO): Promise<number> {
       case 'approvals': return await approvalsCommand(args, rest, io);
       case 'approve': return await approveCommand(args, rest, io);
       case 'watch': return await watchCommand(args, rest, io);
-      default: io.stderr(`Unknown command ${command}`); io.stderr(USAGE); return 2;
+      case 'providers': return await providersCommand(args, rest, io);
+      default: io.stderr(`Unknown command ${command}`); io.stderr(usageFor(io.env)); return 2;
     }
   } catch (error) {
-    if (error instanceof UsageError) { io.stderr(error.message); io.stderr(USAGE); return 2; }
+    if (error instanceof UsageError) { io.stderr(error.message); io.stderr(usageFor(io.env)); return 2; }
     io.stderr(error instanceof ControlClientError ? error.message : error instanceof Error ? error.message : 'your-bot-host failed');
     return 1;
   }
@@ -376,6 +418,228 @@ async function approveCommand(args: Parsed, rest: string[], io: CliIO): Promise<
   if (error) { io.stderr(error); return 1; }
   io.stdout(`${decision.outcome === 'allow' ? 'Allowed' : 'Denied'} ${requestId}`);
   return 0;
+}
+
+function providersApi(io: CliIO): ProvidersDeps {
+  return io.providers ?? { scanProviders, linkProviders, updateAgentCli, loginTarget, agentSpec };
+}
+
+function optionalDataDir(args: Parsed, env: Record<string, string | undefined>): string | undefined {
+  return flag(args, 'data') ?? env.YOUR_BOT_DATA;
+}
+
+async function defaultConnectOwner(dataDir: string): Promise<OwnerSession | undefined> {
+  let token: string;
+  try { token = await readControlToken(tokenPath(dataDir)); }
+  catch (error) {
+    if (codeOf(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+  let endpoint: string;
+  try { endpoint = await controlEndpoint(dataDir); }
+  catch (error) {
+    if (codeOf(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+  try { return await connectControl(endpoint, token); }
+  catch (error) {
+    if (error instanceof ControlClientError && error.message === 'UNAUTHORIZED') throw new Error('The control token was rejected.');
+    return undefined;
+  }
+}
+
+async function openOwner(args: Parsed, io: CliIO): Promise<OwnerSession | undefined> {
+  const dataDir = optionalDataDir(args, io.env);
+  if (!dataDir) return undefined;
+  return (io.connectOwner ?? defaultConnectOwner)(dataDir);
+}
+
+function ownerCommand(session: OwnerSession, command: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return session.call({ ...command, version: 2, id: typeof command.id === 'string' ? command.id : randomUUID() });
+}
+
+function settingsFrom(result: Record<string, unknown>): AppSettingsV2 {
+  const snapshot = result.snapshot;
+  if (!snapshot || typeof snapshot !== 'object' || !('settings' in snapshot)) throw new Error('Host returned no settings');
+  const settings = snapshot.settings;
+  if (!settings || typeof settings !== 'object' || !('providers' in settings) || !Array.isArray((settings as AppSettingsV2).providers)) throw new Error('Host returned no settings');
+  return settings as AppSettingsV2;
+}
+
+function emitOutput(io: CliIO, text: string): void {
+  if (io.write) io.write(text);
+  else if (text) io.stdout(text.replace(/\n$/, ''));
+}
+
+function agentLine(agent: ProviderScan['agents'][number]): string {
+  const version = agent.version ?? '-';
+  const install = agent.install?.label ?? '-';
+  const update = agent.updateAvailable === true ? 'update available' : agent.updateAvailable === false ? 'current' : '-';
+  const link = agent.linked ? `linked ${agent.providerId}` : 'not linked';
+  return [agent.name, version, install, agent.auth, update, link].join('  ');
+}
+
+function printScan(scan: ProviderScan, io: CliIO): void {
+  const installed = scan.agents.filter(agent => agent.installed);
+  const missing = scan.agents.filter(agent => !agent.installed);
+  const running = scan.servers.filter(server => server.running);
+  for (const agent of installed) io.stdout(agentLine(agent));
+  if (running.length && installed.length) io.stdout('');
+  for (const server of running) {
+    const models = server.models.length === 1 ? '1 model' : `${server.models.length} models`;
+    const link = server.linked ? `linked ${server.providerId}` : 'not linked';
+    io.stdout(`${server.name}  ${server.endpoint}  running  ${models}  ${link}`);
+  }
+  if (missing.length) {
+    if (installed.length || running.length) io.stdout('');
+    io.stdout('Not installed:');
+    for (const agent of missing) io.stdout(`${agent.name}  ${agent.installHint}`);
+  }
+  if (!installed.length && !running.length && !missing.length) io.stdout('No agents found.');
+}
+
+async function providersCommand(args: Parsed, rest: string[], io: CliIO): Promise<number> {
+  const [sub, ...ids] = rest;
+  if (sub === 'list') return providersList(args, ids, io);
+  if (sub === 'link') return providersLink(args, ids, io);
+  if (sub === 'update') return providersUpdate(args, ids, io);
+  if (sub === 'login') return providersLogin(args, ids, io);
+  throw new UsageError('providers requires list, link, update or login');
+}
+
+async function providersList(args: Parsed, ids: string[], io: CliIO): Promise<number> {
+  if (ids.length || args.flags.has('all')) throw new UsageError('providers list takes no ids');
+  const api = providersApi(io);
+  let providers: readonly ProviderConfigV2[] = [];
+  const session = await openOwner(args, io);
+  if (session) {
+    try {
+      const result = await ownerCommand(session, { type: 'state.sync' });
+      const error = resultError(result);
+      if (error) { io.stderr(error); return 1; }
+      providers = settingsFrom(result).providers;
+    } finally { session.close(); }
+  }
+  const scan = await api.scanProviders(providers, {
+    checkUpdates: !args.flags.has('no-updates'),
+    checkAuth: !args.flags.has('no-auth'),
+    env: io.env,
+  });
+  if (args.flags.has('json')) io.stdout(JSON.stringify(scan, null, 2));
+  else printScan(scan, io);
+  return 0;
+}
+
+function targetIds(args: Parsed, ids: string[], command: 'link' | 'update'): readonly string[] | 'all' {
+  const all = args.flags.has('all');
+  if (all && ids.length) throw new UsageError(`providers ${command} accepts ids or --all, not both`);
+  if (!all && !ids.length) throw new UsageError(`providers ${command} requires an id or --all`);
+  return all ? 'all' : ids;
+}
+
+async function providersLink(args: Parsed, ids: string[], io: CliIO): Promise<number> {
+  const targets = targetIds(args, ids, 'link');
+  const session = await openOwner(args, io);
+  if (!session) { io.stderr(NOT_RUNNING); return 1; }
+  try {
+    const sync = await ownerCommand(session, { type: 'state.sync' });
+    const syncError = resultError(sync);
+    if (syncError) { io.stderr(syncError); return 1; }
+    const summary = await providersApi(io).linkProviders(settingsFrom(sync), targets, { checkAuth: false, checkUpdates: false, env: io.env });
+    for (const skipped of summary.skipped) io.stdout(`skipped ${skipped.id}: ${skipped.reason}`);
+    if (!summary.linked.length) {
+      if (!summary.skipped.length) io.stdout('Nothing to link.');
+      return summary.skipped.length ? 1 : 0;
+    }
+    const saved = await ownerCommand(session, { type: 'settings.update', settings: summary.settings });
+    if (saved.ok !== true) {
+      const code = saved.error && typeof saved.error === 'object' && 'code' in saved.error && typeof saved.error.code === 'string' ? saved.error.code : '';
+      io.stderr(code === 'SETTINGS_BUSY' ? SETTINGS_BUSY : resultError(saved) ?? 'Could not save settings');
+      return 1;
+    }
+    for (const linked of summary.linked) io.stdout(`${linked.created ? 'created' : 'refreshed'} ${linked.name} (${linked.providerId})`);
+    const refreshed = await ownerCommand(session, { type: 'models.refresh' });
+    if (refreshed.ok !== true) io.stderr(`Models were not refreshed: ${resultError(refreshed) ?? 'models.refresh failed'}`);
+    return 0;
+  } finally { session.close(); }
+}
+
+async function relinkNpx(id: string, spec: AgentCliSpec, args: Parsed, io: CliIO): Promise<void> {
+  if (spec.acp.via !== 'npx') return;
+  const session = await openOwner(args, io);
+  if (!session) return;
+  try {
+    const sync = await ownerCommand(session, { type: 'state.sync' });
+    if (sync.ok !== true) return;
+    const settings = settingsFrom(sync);
+    if (!linkedProvider(settings.providers, spec)) return;
+    const summary = await providersApi(io).linkProviders(settings, [id], { checkAuth: false, checkUpdates: false, env: io.env });
+    if (!summary.linked.length) return;
+    const saved = await ownerCommand(session, { type: 'settings.update', settings: summary.settings });
+    if (saved.ok !== true) return;
+    await ownerCommand(session, { type: 'models.refresh' });
+  } catch { /* The update succeeded; re-pinning can be retried with providers link. */ }
+  finally { session.close(); }
+}
+
+async function providersUpdate(args: Parsed, ids: string[], io: CliIO): Promise<number> {
+  const api = providersApi(io);
+  let targets: string[];
+  if (args.flags.has('all')) {
+    if (ids.length) throw new UsageError('providers update accepts ids or --all, not both');
+    const scan = await api.scanProviders([], { checkUpdates: true, checkAuth: false, env: io.env });
+    targets = scan.agents.filter(agent => agent.installed && agent.updateAvailable === true).map(agent => agent.id);
+    if (!targets.length) { io.stdout('Everything is up to date.'); return 0; }
+  } else {
+    if (!ids.length) throw new UsageError('providers update requires an id or --all');
+    targets = ids;
+  }
+  let failed = false;
+  for (const id of targets) {
+    const spec = api.agentSpec(id);
+    io.stdout(`Updating ${spec?.name ?? id}...`);
+    const result = await api.updateAgentCli(id, {
+      env: io.env,
+      signal: io.signal,
+      onOutput: text => emitOutput(io, text),
+    });
+    if (!result.ok) { io.stderr(result.message); failed = true; continue; }
+    io.stdout(result.message);
+    if (spec) await relinkNpx(id, spec, args, io);
+  }
+  return failed ? 1 : 0;
+}
+
+/** Spawn a sign-in plan. `.cmd` / `.bat` shims on Windows go through `cmd.exe /d /s /c` with `shell: false`. */
+export function loginSpawnArgs(plan: { command: string; args: readonly string[] }, platform: NodeJS.Platform = process.platform): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  const shim = platform === 'win32' && /\.(cmd|bat)$/i.test(plan.command);
+  if (!shim) return { command: plan.command, args: [...plan.args] };
+  // `/s` strips one pair of surrounding quotes, so the whole line is wrapped once and each token is quoted.
+  const quote = (token: string) => {
+    if (token.length === 0) return '""';
+    if (!/[\s"&<>()@^|]/.test(token)) return token;
+    return `"${token.replace(/"/g, '""')}"`;
+  };
+  const inner = [plan.command, ...plan.args].map(quote).join(' ');
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${inner}"`], windowsVerbatimArguments: true };
+}
+
+async function defaultRunLogin(plan: LoginTarget['plan'], signal?: AbortSignal): Promise<number> {
+  const spawned = loginSpawnArgs(plan);
+  return new Promise((resolve, reject) => {
+    const child = spawn(spawned.command, spawned.args, { stdio: 'inherit', shell: false, signal, windowsVerbatimArguments: spawned.windowsVerbatimArguments });
+    child.once('error', error => { if (signal?.aborted) resolve(130); else reject(error); });
+    child.once('exit', (code, exitSignal) => resolve(code ?? (exitSignal ? 1 : 0)));
+  });
+}
+
+async function providersLogin(args: Parsed, ids: string[], io: CliIO): Promise<number> {
+  if (args.flags.has('all') || ids.length !== 1) throw new UsageError('providers login requires one agent id');
+  let target: LoginTarget;
+  try { target = await providersApi(io).loginTarget(ids[0]!, undefined); }
+  catch (error) { io.stderr(error instanceof Error ? error.message : 'Could not start sign-in'); return 1; }
+  try { return await (io.runLogin ?? (plan => defaultRunLogin(plan, io.signal)))(target.plan); }
+  catch (error) { io.stderr(error instanceof Error ? error.message : 'Could not start sign-in'); return 1; }
 }
 
 async function watchCommand(args: Parsed, rest: string[], io: CliIO): Promise<number> {

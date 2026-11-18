@@ -6,7 +6,7 @@ describe('sandbox preload', () => {
   it('exposes only fixed dispatch, subscription, folder-picker and appearance functions, excluding IPC event objects', async () => {
     expect(fake.expose).toHaveBeenCalledOnce();
     const [name, transport] = fake.expose.mock.calls[0];
-    expect(name).toBe('yourBot'); expect(Object.keys(transport).sort()).toEqual(['chooseDirectory', 'dispatch', 'loadAppearance', 'saveAppearance', 'subscribe']); expect(Object.isFrozen(transport)).toBe(true);
+    expect(name).toBe('yourBot'); expect(Object.keys(transport).sort()).toEqual(['chooseDirectory', 'dispatch', 'loadAppearance', 'providers', 'saveAppearance', 'subscribe']); expect(Object.isFrozen(transport)).toBe(true); expect(Object.keys(transport.providers).sort()).toEqual(['link', 'login', 'scan', 'update']); expect(Object.isFrozen(transport.providers)).toBe(true);
     const command = { version: 1, id: 'c', type: 'state.sync' };
     await transport.dispatch(command); expect(fake.invoke).toHaveBeenCalledWith('your-bot:dispatch', command);
     const listener = vi.fn(); const unsubscribe = transport.subscribe(listener);
@@ -38,6 +38,19 @@ describe('sandbox preload', () => {
     fake.invoke.mockClear();
     expect(await transport.saveAppearance({ ...prefs, colorMode: 'neon' })).toBe(false);
     expect(await transport.saveAppearance({ ...prefs, path: '/tmp/x' })).toBe(false);
+    expect(fake.invoke).not.toHaveBeenCalled();
+  });
+  it('providers bridge sends only id strings on fixed channels', async () => {
+    const { providers } = fake.expose.mock.calls[0][1];
+    fake.invoke.mockClear();
+    await providers.scan(); expect(fake.invoke).toHaveBeenCalledWith('your-bot:providers-scan');
+    await providers.link(['claude', 'ollama']); expect(fake.invoke).toHaveBeenCalledWith('your-bot:providers-link', ['claude', 'ollama']);
+    await providers.link('all'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:providers-link', 'all');
+    await providers.update('claude'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:providers-update', 'claude');
+    await providers.login('codex'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:providers-login', 'codex');
+    fake.invoke.mockClear();
+    expect(() => providers.link('everything')).toThrow(); expect(() => providers.link([{ command: 'rm' }])).toThrow(); expect(() => providers.link(Array(33).fill('claude'))).toThrow();
+    expect(() => providers.update({ id: 'claude' })).toThrow(); expect(() => providers.login(undefined)).toThrow(); expect(() => providers.update('')).toThrow();
     expect(fake.invoke).not.toHaveBeenCalled();
   });
 });

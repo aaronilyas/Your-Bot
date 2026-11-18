@@ -4,7 +4,8 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AnyCommandResult, DesktopGateway, DesktopGatewayV2, OwnerNotification, PrincipalV2 } from '@your-bot/contracts';
-import { IPC } from '../shared/ipc';
+import { AGENT_CLIS, LOCAL_SERVERS, agentSpec, linkProviders, linkedProvider, loginTarget, openInTerminal, scanProviders, updateAgentCli } from '@your-bot/providers';
+import { IPC, type ProvidersLinkResult, type ProvidersLoginResult, type ProvidersScanResult, type ProvidersUpdateResult } from '../shared/ipc';
 import { parseAppearance, type AppearancePrefs } from '../shared/appearance';
 import { parseAnyCommand, trustedRendererURL, validateDevelopmentURL, rendererCSP, redactResult, rendererEvent } from './security';
 export interface GatewayFactoryContext {
@@ -136,6 +137,64 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     appearanceWrite = write.catch(() => {});
     try { await write; return true; } catch { return false; }
   });
+  // Agent CLI / local model server detection. The renderer only supplies catalog ids; commands and paths never cross IPC.
+  const knownTargets = new Set<string>([...AGENT_CLIS.map(spec => spec.id), ...LOCAL_SERVERS.map(server => server.id)]);
+  const agentId = (value: unknown): string => { if (typeof value !== 'string' || !agentSpec(value)) throw new Error('Unknown agent'); return value; };
+  const currentSettings = async () => {
+    const result = await gateway.dispatch({ version: 2, id: randomUUID(), type: 'state.sync' }, principal);
+    if (!result.ok || !('snapshot' in result) || !result.snapshot) throw new Error('Could not read the current settings');
+    return result.snapshot.settings;
+  };
+  const failure = (error: unknown, fallback: string): string => error instanceof Error && error.message ? error.message.slice(0, 500) : fallback;
+  /** Link targets into settings and save them. Returns the summary plus a friendly error when settings could not be saved. */
+  const linkAndSave = async (targets: string[] | 'all'): Promise<ProvidersLinkResult> => {
+    const settings = await currentSettings();
+    const summary = await linkProviders(settings, targets);
+    const outcome: ProvidersLinkResult = { linked: summary.linked, skipped: summary.skipped };
+    if (summary.linked.length === 0) return outcome;
+    const saved = await gateway.dispatch({ version: 2, id: randomUUID(), type: 'settings.update', settings: summary.settings }, principal);
+    if (!saved.ok) {
+      outcome.linked = [];
+      outcome.error = /BUSY/i.test(saved.error.code) ? 'Settings cannot change while a task is running. Wait for it to finish, then try again.' : saved.error.message;
+      return outcome;
+    }
+    await gateway.dispatch({ version: 2, id: randomUUID(), type: 'models.refresh' }, principal);
+    return outcome;
+  };
+  ipcMain.handle(IPC.providersScan, async (event): Promise<ProvidersScanResult> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    if (closed) throw new Error('The desktop host is closed');
+    return JSON.parse(JSON.stringify(await scanProviders((await currentSettings()).providers)));
+  });
+  ipcMain.handle(IPC.providersLink, async (event, targets: unknown): Promise<ProvidersLinkResult> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    if (closed) throw new Error('The desktop host is closed');
+    if (targets !== 'all' && !(Array.isArray(targets) && targets.length <= 32 && targets.every(target => typeof target === 'string' && knownTargets.has(target)))) throw new Error('Unknown connection target');
+    try { return JSON.parse(JSON.stringify(await linkAndSave(targets as string[] | 'all'))); }
+    catch (error) { return { linked: [], skipped: [], error: failure(error, 'Could not connect.') }; }
+  });
+  ipcMain.handle(IPC.providersUpdate, async (event, value: unknown): Promise<ProvidersUpdateResult> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    if (closed) throw new Error('The desktop host is closed');
+    const id = agentId(value);
+    const result = await updateAgentCli(id);
+    const out: ProvidersUpdateResult = JSON.parse(JSON.stringify({ ...result, output: String(result.output ?? '').slice(-8192) }));
+    const spec = agentSpec(id);
+    if (result.ok && spec?.acp.via === 'npx') {
+      try {
+        const linked = linkedProvider((await currentSettings()).providers, spec) !== undefined;
+        if (linked) { const relinked = await linkAndSave([id]); if (relinked.error) out.message = `${out.message} (${relinked.error})`; }
+      } catch { /* The update itself succeeded; re-pinning can be retried with Reconnect. */ }
+    }
+    return out;
+  });
+  ipcMain.handle(IPC.providersLogin, async (event, value: unknown): Promise<ProvidersLoginResult> => {
+    if (!trusted(event)) throw new Error('Untrusted IPC sender');
+    if (closed) throw new Error('The desktop host is closed');
+    const id = agentId(value);
+    try { await openInTerminal(await loginTarget(id)); return { ok: true }; }
+    catch (error) { return { ok: false, message: failure(error, 'Could not open a terminal.') }; }
+  });
   let unsubscribe = () => {};
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -147,6 +206,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       ipcMain.removeHandler(IPC.chooseDirectory);
       ipcMain.removeHandler(IPC.loadAppearance);
       ipcMain.removeHandler(IPC.saveAppearance);
+      for (const channel of [IPC.providersScan, IPC.providersLink, IPC.providersUpdate, IPC.providersLogin]) ipcMain.removeHandler(channel);
       unsubscribe();
       if (!window.isDestroyed()) window.destroy();
       await gateway.close();

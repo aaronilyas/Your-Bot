@@ -9,6 +9,7 @@ files:
   - dist/main/**
   - dist/preload/**
   - dist/renderer/**
+  - dist/cli/**
   - package.json
 artifactName: Your-Bot-${version}-${os}-${arch}.${ext}
 npmRebuild: false

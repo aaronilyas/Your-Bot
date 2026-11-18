@@ -329,3 +329,18 @@ h1 { font-weight: 600; letter-spacing: -.4px; font-size: 26px; margin: 20px 0 6p
 @media (max-width: 1180px) { .details, .header-actions .icon-button { display: none; } .main:has(.details) .season-art { right: 0; } }
 @media (max-width: 900px) { .sidebar { width: 240px; } .privacy-badge, .composer-note .keys { display: none; } .conversation-inner, .composer-area { padding-inline: 18px; } .page { padding-inline: 20px; } .card-list { grid-template-columns: 1fr; } .settings-layout { grid-template-columns: 1fr; } .settings-tabs { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 8px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; } }
+.agents-section { margin-bottom: 22px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.agents-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.agents-title .settings-group-title { margin: 0; }
+.agent-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.agent-row { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.agent-head, .agent-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-row p { margin: 0; }
+.agent-note { font-size: 13px; color: var(--muted); }
+.agent-note.good { color: var(--good); }
+.agent-note.bad { color: var(--bad); }
+.agent-output { max-height: 160px; overflow: auto; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; background: var(--field); border-radius: 8px; padding: 8px; color: var(--text); }
+.agent-missing { margin-top: 12px; font-size: 13px; }
+.agent-missing ul { list-style: none; padding: 0; display: grid; gap: 8px; margin: 8px 0 0; }
+.agent-missing li { display: grid; gap: 2px; }
+.agent-missing code, .agents-section code { font-family: ui-monospace, monospace; font-size: 12px; }

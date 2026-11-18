@@ -419,4 +419,69 @@ describe('provider settings', () => {
     expect(commands('settings.update')[0].settings.providers).toEqual([{ id: expect.any(String), name: 'Local provider', kind: 'acp', enabled: true, launch: 'host', command: 'grok', args: ['agent', 'stdio'], envPassthrough: ['GROK_API_KEY'], endpoint: 'http://127.0.0.1:8080/v1' }]);
   });
 });
+
+describe('agents on this computer', () => {
+  const agent = (extra: object) => ({ id: 'claude', name: 'Claude Code', installed: true, version: '2.1.0', auth: 'signed-in', providerId: 'agent-claude', linked: false, installHint: 'npm i -g x', docs: 'https://docs.example', ...extra });
+  const scan = () => ({ agents: [agent({ latestVersion: '2.2.0', updateAvailable: true, install: { kind: 'mise', label: 'mise (claude)' }, update: { command: 'mise upgrade claude' } }), agent({ id: 'codex', name: 'Codex', auth: 'signed-out', login: 'codex login', update: { manual: 'Update Codex with brew' }, missingNpx: true }), agent({ id: 'grok', name: 'Grok Build', installed: false, installHint: 'curl grok.sh | bash' })], servers: [{ id: 'ollama', name: 'Ollama', endpoint: 'http://127.0.0.1:11434', running: true, models: ['m'], providerId: 'local-ollama', linked: false }] });
+  async function openProviders(providers?: unknown, respond?: Responder) {
+    const h = await open({}, respond);
+    if (providers) (h.transport as any).providers = providers;
+    await h.user.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await h.user.click(within(dialog).getByRole('tab', { name: 'Providers' }));
+    return { ...h, dialog };
+  }
+  it('lists detected agents, servers and not-installed agents', async () => {
+    const api = { scan: vi.fn(async () => scan()), link: vi.fn(), update: vi.fn(), login: vi.fn() };
+    const { dialog } = await openProviders(api);
+    await within(dialog).findByText('Claude Code');
+    expect(within(dialog).getByText('mise (claude)')).toBeTruthy(); expect(within(dialog).getByText('Update available → 2.2.0')).toBeTruthy();
+    expect(within(dialog).getByText('Signed in')).toBeTruthy(); expect(within(dialog).getByText('Not signed in')).toBeTruthy();
+    expect(within(dialog).getByText(/needs Node\.js/)).toBeTruthy(); expect(within(dialog).getByText('Update Codex with brew')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Connect Ollama' })).toBeTruthy();
+    expect(within(dialog).getByText('Not installed (1)')).toBeTruthy(); expect(within(dialog).getByText('curl grok.sh | bash')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Update Codex' })).toBeNull(); expect(within(dialog).queryByRole('button', { name: 'Sign in to Claude Code' })).toBeNull();
+    expect(within(dialog).getByText('Manual setup')).toBeTruthy();
+  });
+  it('connects, refreshes the local provider list and keeps it on Save', async () => {
+    const linkedProvider = { id: 'agent-claude', name: 'Claude Code', kind: 'acp', enabled: true, launch: 'host', command: 'claude', args: [] };
+    let connected = false;
+    const api = { scan: vi.fn(async () => { const s = scan(); if (connected) s.agents[0].linked = true; return s; }), link: vi.fn(async (_t: unknown) => ({ linked: [] as { id: string; name: string; providerId: string; created: boolean }[], skipped: [] })), update: vi.fn(), login: vi.fn() };
+    const { dialog, user, commands, snapshot } = await openProviders(api);
+    api.link.mockImplementation(async () => { connected = true; snapshot.settings = { providers: [linkedProvider] } as never; return { linked: [{ id: 'claude', name: 'Claude Code', providerId: 'agent-claude', created: true }], skipped: [] }; });
+    await user.click(await within(dialog).findByRole('button', { name: 'Connect Claude Code' }));
+    await waitFor(() => expect(api.link).toHaveBeenCalledWith(['claude']));
+    await within(dialog).findByRole('button', { name: 'Reconnect Claude Code' });
+    expect(within(dialog).getByDisplayValue('Claude Code')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Save settings' }));
+    await waitFor(() => expect(commands('settings.update')).toHaveLength(1));
+    expect(commands('settings.update')[0].settings.providers.map(p => p.id)).toEqual(['agent-claude']);
+  });
+  it('connects everything with Connect all', async () => {
+    const api = { scan: vi.fn(async () => scan()), link: vi.fn(async () => ({ linked: [], skipped: [] })), update: vi.fn(), login: vi.fn() };
+    const { dialog, user } = await openProviders(api);
+    await within(dialog).findByText('Claude Code');
+    await user.click(within(dialog).getByRole('button', { name: 'Connect all' }));
+    await waitFor(() => expect(api.link).toHaveBeenCalledWith('all'));
+  });
+  it('shows the update result and output, and rescans', async () => {
+    const api = { scan: vi.fn(async () => scan()), link: vi.fn(), update: vi.fn(async () => ({ ok: true, message: 'Claude Code updated to 2.2.0', output: 'installing\ndone' })), login: vi.fn() };
+    const { dialog, user } = await openProviders(api);
+    await user.click(await within(dialog).findByRole('button', { name: 'Update Claude Code' }));
+    await within(dialog).findByText(/Claude Code updated to 2\.2\.0/);
+    expect(within(dialog).getByText(/installing/)).toBeTruthy(); expect(api.update).toHaveBeenCalledWith('claude');
+    await waitFor(() => expect(api.scan).toHaveBeenCalledTimes(2));
+  });
+  it('opens sign-in in the terminal and explains the next step', async () => {
+    const api = { scan: vi.fn(async () => scan()), link: vi.fn(), update: vi.fn(), login: vi.fn(async () => ({ ok: true })) };
+    const { dialog, user } = await openProviders(api);
+    await user.click(await within(dialog).findByRole('button', { name: 'Sign in to Codex' }));
+    expect(api.login).toHaveBeenCalledWith('codex');
+    await within(dialog).findByText(/terminal window that opened/);
+  });
+  it('hides the section when the host has no providers API', async () => {
+    const { dialog } = await openProviders();
+    expect(within(dialog).queryByText('Agents on this computer')).toBeNull(); expect(within(dialog).getByRole('button', { name: 'Add provider' })).toBeTruthy();
+  });
+});
 void agents;

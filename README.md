@@ -57,6 +57,21 @@ Builds are unsigned unless signing secrets are configured. With no certificate, 
 
 Chromium's renderer sandbox must work on the host. If AppArmor prevents development Electron from starting, use an administrator-installed package or configure the host's approved Chromium sandbox policy. The application never supplies `--no-sandbox` and does not change system policy. The disposable container workflow below permits native validation without changing the host.
 
+## Connect agents automatically
+
+Open **Settings → Providers**. Under **Agents on this computer**, **Connect** links an installed agent CLI (Claude Code, Codex, Grok Build, and the others Your Bot knows) as a host-launched provider, **Update** runs that CLI's updater, and **Sign in** opens its login in a terminal. Running local servers (LM Studio, Ollama, llama.cpp) can be connected from the same place.
+
+A packaged app installs a `your-bot` command the first time it starts (`~/.local/bin/your-bot` on Linux and macOS, or the user PATH on Windows). `YOUR_BOT_NO_CLI=1` skips that install. With no arguments, `your-bot` opens the app. Otherwise it runs the app's bundled CLI against the running app:
+
+```
+your-bot providers list [--json] [--no-updates] [--no-auth]
+your-bot providers link [<id>...] [--all]
+your-bot providers update [<id>...] [--all]
+your-bot providers login <id>
+```
+
+`link` needs the desktop app or `your-bot-host run` to be running. Like the headless host, the desktop app opens the owner control socket (`<data>/control.sock`, mode 0600; a named pipe on Windows) that requires the data directory's `control.token`; only the commands use it, and the renderer still cannot pass commands or paths, only agent ids. Detection reads the PATH your login shell builds, so agents installed through mise, asdf, bun, Volta, npm or Homebrew are found even when the app starts from a desktop launcher, and probes never trigger mise auto-installs. Adding a provider by hand, below, remains the fallback when an agent is not in that list.
+
 ## Connect LM Studio or llama.cpp
 
 Start the local server and load a model, then open **Settings → Add provider**. Choose **LM Studio**, **llama.cpp**, or **OpenAI compatible**. Defaults are `http://127.0.0.1:1234/v1` for LM Studio and `http://127.0.0.1:8080/v1` for llama.cpp. Enter the API base and optional model ID, save, refresh models, and select the agent/model before creating a conversation.
@@ -76,7 +91,7 @@ Harnesses can delegate tools through the documented `_your_bot/execute_tool` ext
 A bot is a persistent entity: name, instructions, agent and model, workspace folder, execution profile, MCP servers, enabled skills, memory and compaction policy. Sessions belong to a bot. Two profiles exist:
 
 - **strict** (default): exactly the contained behaviour above — no network, process spawn or filesystem for the agent; tools go through the Python sandbox. Fail-closed.
-- **trusted** (opt-in, local owner only): the installed agent CLI runs **uncontained, with your user rights and network**, in the bot's workspace. Configure the provider with launch mode *host* (e.g. command `grok`, args `agent stdio`; or `npx -y @agentclientprotocol/claude-agent-acp`). The adapter advertises ACP `fs` and `terminal` capabilities; every `fs/read_text_file`, `fs/write_text_file`, `terminal/*` request and every agent `session/request_permission` is authorized by the gateway and performed by the core's workspace host, confined to the workspace. What the agent process does internally without asking is not mediated — choose trusted only for agents you trust. Works on Linux, macOS and Windows.
+- **trusted** (opt-in, local owner only): the installed agent CLI runs **uncontained, with your user rights and network**, in the bot's workspace. **Connect** on Settings → Providers does this for a known agent. The manual fallback is a provider with launch mode *host* (e.g. command `grok`, args `agent stdio`; or `npx -y @agentclientprotocol/claude-agent-acp`). The adapter advertises ACP `fs` and `terminal` capabilities; every `fs/read_text_file`, `fs/write_text_file`, `terminal/*` request and every agent `session/request_permission` is authorized by the gateway and performed by the core's workspace host, confined to the workspace. What the agent process does internally without asking is not mediated — choose trusted only for agents you trust. Works on Linux, macOS and Windows.
 
 Paired devices can start runs and answer approvals but cannot mark a bot trusted, change its workspace, agent or MCP servers, edit provider settings or manage devices.
 
@@ -134,4 +149,4 @@ See [executed validation and limitations](docs/validation.md), [engineering repo
 
 ## Architecture
 
-`packages/contracts` owns the wire contracts: v1 (frozen) and v2 (additive: bots, grants, routines, memory, devices, skills). `core` owns SQLite, sessions, bots, the single authorization pipeline, standing grants and audit, routines, memory, compaction and notifications. `adapters` owns ACP (contained and trusted) and local HTTP models; `workspace` performs confined file/terminal operations; `mcp` owns the MCP broker and proxy; `executor` owns Python skills and OS isolation; `remote` owns the TLS WebSocket host, pairing and multi-host client; `skills` and `secrets` load user skills and encrypt secrets; `runtime` composes all of it for both `apps/desktop` and `apps/host`. See [architecture](docs/architecture.md), [security](docs/security.md) and [progress](docs/PROGRESS.md).
+`packages/contracts` owns the wire contracts: v1 (frozen) and v2 (additive: bots, grants, routines, memory, devices, skills). `core` owns SQLite, sessions, bots, the single authorization pipeline, standing grants and audit, routines, memory, compaction and notifications. `adapters` owns ACP (contained and trusted) and local HTTP models; `workspace` performs confined file/terminal operations; `mcp` owns the MCP broker and proxy; `executor` owns Python skills and OS isolation; `remote` owns the TLS WebSocket host, pairing and multi-host client; `skills` and `secrets` load user skills and encrypt secrets; `providers` finds, links, updates and signs in to the agent CLIs and local model servers on the machine ([details](packages/providers/README.md)); `runtime` composes all of it for both `apps/desktop` and `apps/host`. See [architecture](docs/architecture.md), [security](docs/security.md) and [progress](docs/PROGRESS.md).
