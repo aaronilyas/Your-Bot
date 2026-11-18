@@ -42,7 +42,11 @@ function frames(endpoint: string, messages: unknown[]): Promise<string[]> {
         newline = buffer.indexOf('\n');
       }
     });
-    socket.on('error', error => { clearTimeout(timer); reject(error); });
+    // The server destroys the socket after a rejected token; writes still in flight then see a reset. That is a close.
+    socket.on('error', error => {
+      clearTimeout(timer);
+      if (['ECONNRESET', 'EPIPE'].includes((error as NodeJS.ErrnoException).code ?? '')) resolve(lines); else reject(error);
+    });
     socket.on('connect', () => { for (const message of messages) socket.write(`${JSON.stringify(message)}\n`); });
     socket.on('close', () => { clearTimeout(timer); resolve(lines); });
   });
