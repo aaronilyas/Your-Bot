@@ -5,7 +5,8 @@ import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AnyCommandResult, DesktopGateway, DesktopGatewayV2, OwnerNotification, PrincipalV2 } from '@your-bot/contracts';
 import { AGENT_CLIS, LOCAL_SERVERS, agentSpec, linkProviders, linkedProvider, loginTarget, openInTerminal, scanProviders, updateAgentCli } from '@your-bot/providers';
-import { IPC, type ProvidersLinkResult, type ProvidersLoginResult, type ProvidersScanResult, type ProvidersUpdateResult } from '../shared/ipc';
+import { IPC, type ProvidersLinkResult, type ProvidersLoginResult, type ProvidersScanResult, type ProvidersUpdateResult, type UpdateCheckResult, type UpdateInstallResult, type UpdateStatus } from '../shared/ipc';
+import { TAG, type Updater } from './updater';
 import { parseAppearance, type AppearancePrefs } from '../shared/appearance';
 import { parseAnyCommand, trustedRendererURL, validateDevelopmentURL, rendererCSP, redactResult, rendererEvent } from './security';
 export interface GatewayFactoryContext {
@@ -24,6 +25,8 @@ export interface DesktopHostOptions {
   developmentURL?: string;
   rendererFile?: string;
   preloadFile?: string;
+  /** In-app updates; without it the update channels are not registered and the renderer hides the panel. */
+  updater?: Updater;
 }
 export interface DesktopHost {
   readonly window: BrowserWindow;
@@ -195,6 +198,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     try { await openInTerminal(await loginTarget(id)); return { ok: true }; }
     catch (error) { return { ok: false, message: failure(error, 'Could not open a terminal.') }; }
   });
+  // In-app updates. The renderer sends only a release tag or a boolean; URLs, files and commands stay in the host.
+  const { updater } = options;
+  const UPDATE_CHANNELS = [IPC.updatesStatus, IPC.updatesCheck, IPC.updatesInstall, IPC.updatesOpenRelease, IPC.updatesSetAutoCheck];
+  if (updater) {
+    const tag = (value: unknown): string => { if (typeof value !== 'string' || value.length > 80 || !TAG.test(value)) throw new Error('Unknown version'); return value; };
+    const guard = (event: IpcMainInvokeEvent) => { if (!trusted(event)) throw new Error('Untrusted IPC sender'); if (closed) throw new Error('The desktop host is closed'); };
+    const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+    ipcMain.handle(IPC.updatesStatus, async (event): Promise<UpdateStatus> => { guard(event); return plain(await updater.status()); });
+    ipcMain.handle(IPC.updatesCheck, async (event, force: unknown): Promise<UpdateCheckResult> => { guard(event); return plain(await updater.check(force === true)); });
+    ipcMain.handle(IPC.updatesInstall, async (event, value: unknown): Promise<UpdateInstallResult> => {
+      guard(event);
+      return plain(await updater.install(tag(value), progress => { if (!closed && !window.isDestroyed() && trustedRendererURL(window.webContents.getURL(), expectedURL)) window.webContents.send(IPC.updatesProgress, plain(progress)); }));
+    });
+    ipcMain.handle(IPC.updatesOpenRelease, async (event, value: unknown): Promise<boolean> => { guard(event); return updater.openRelease(value === undefined ? undefined : tag(value)); });
+    ipcMain.handle(IPC.updatesSetAutoCheck, async (event, value: unknown): Promise<boolean> => { guard(event); if (typeof value !== 'boolean') throw new Error('A boolean is required'); return updater.setAutoCheck(value); });
+  }
   let unsubscribe = () => {};
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -207,6 +226,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       ipcMain.removeHandler(IPC.loadAppearance);
       ipcMain.removeHandler(IPC.saveAppearance);
       for (const channel of [IPC.providersScan, IPC.providersLink, IPC.providersUpdate, IPC.providersLogin]) ipcMain.removeHandler(channel);
+      if (updater) for (const channel of UPDATE_CHANNELS) ipcMain.removeHandler(channel);
       unsubscribe();
       if (!window.isDestroyed()) window.destroy();
       await gateway.close();

@@ -3,7 +3,7 @@ import type { AgentInfo, Bot, SessionV2 } from '@your-bot/contracts';
 import { DesktopStore, type DesktopTransport } from './store';
 import { Badge, Icon, Modal, type IconName } from './ui';
 import { ApprovalDialog } from './ApprovalDialog';
-import { SettingsDialog } from './SettingsDialog';
+import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { BotsView } from './BotsView';
 import { PermissionsView } from './PermissionsView';
 import { RoutinesView } from './RoutinesView';
@@ -32,7 +32,23 @@ export function App({ transport, demo = false }: AppProps) {
   const { snapshot, selectedSessionId, connection } = state;
   const selected: SessionV2 | undefined = snapshot.sessions.find(s => s.id === selectedSessionId);
   const [view, setView] = useState<View>('chat');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState<false | SettingsTab>(false);
+  /** Newest release when the startup check (if enabled) found one. */
+  const [availableUpdate, setAvailableUpdate] = useState<string>();
+  useEffect(() => {
+    const updates = store.updates;
+    if (!updates) return;
+    let live = true;
+    void (async () => {
+      try {
+        if (!(await updates.status()).autoCheck) return;
+        const result = await updates.check();
+        const latest = result.releases.find(release => release.tag === result.latest);
+        if (live && result.updateAvailable && latest) setAvailableUpdate(latest.version);
+      } catch { /* Update checks are best effort and never interrupt the app. */ }
+    })();
+    return () => { live = false; };
+  }, [store]);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [deleteId, setDeleteId] = useState<string>();
   const [search, setSearch] = useState('');
@@ -145,8 +161,8 @@ export function App({ transport, demo = false }: AppProps) {
         </nav>
         <div className="sidebar-bottom">
           <nav className="nav-links" aria-label="Sections">{NAV.map(item => <button key={item.view} className={`nav-link ${view === item.view ? 'active' : ''}`} aria-current={view === item.view ? 'page' : undefined} onClick={() => setView(item.view)}><span className="nav-icon"><Icon name={item.icon} size={15} /></span><span>{VIEW_TITLES[item.view]}</span>{badges[item.view] > 0 && <span className="nav-badge" aria-label={`${badges[item.view]} waiting`}>{badges[item.view]}</span>}</button>)}
-            <button className="nav-link" disabled={!ready} onClick={() => setSettingsOpen(true)}><span className="nav-icon"><Icon name="settings" size={15} /></span><span>Settings</span></button></nav>
-          <div className="connection"><span className={`connection-dot ${connection}`} /><span>{connection === 'connected' ? demo ? 'Browser demo' : 'Backend connected' : connection === 'loading' ? 'Connecting…' : 'Backend disconnected'}</span><span className="version">v{__APP_VERSION__}</span></div></div>
+            <button className="nav-link" disabled={!ready} onClick={() => setSettingsOpen('general')}><span className="nav-icon"><Icon name="settings" size={15} /></span><span>Settings</span></button></nav>
+          <div className="connection"><span className={`connection-dot ${connection}`} /><span>{connection === 'connected' ? demo ? 'Browser demo' : 'Backend connected' : connection === 'loading' ? 'Connecting…' : 'Backend disconnected'}</span>{availableUpdate ? <button type="button" className="version update-pill" disabled={!ready} title={`Version ${availableUpdate} is available`} onClick={() => setSettingsOpen('updates')}><Icon name="download" size={12} />Update to {availableUpdate}</button> : <span className="version">v{__APP_VERSION__}</span>}</div></div>
       </aside>
       <main className="main">{appearance.showArt && <SeasonArt look={appearance.look} />}
         <header className="topbar"><div className="header-title">{headerTitle}</div><div className="header-actions"><span className="privacy-badge"><Icon name="shield" size={13} />{demo ? 'Simulated' : snapshot.host.name || 'Private workspace'}</span>
@@ -193,6 +209,6 @@ export function App({ transport, demo = false }: AppProps) {
     </div>
     {permission ? <ApprovalDialog key={permission.id} request={permission} bot={snapshot.bots.find(bot => bot.id === permission.botId)} sessionTitle={snapshot.sessions.find(s => s.id === permission.sessionId)?.title ?? permission.sessionId}
         run={snapshot.routineRuns.find(run => run.id === permission.routineRunId)} routine={snapshot.routines.find(routine => routine.id === snapshot.routineRuns.find(run => run.id === permission.routineRunId)?.routineId)} store={store} onClose={() => dismiss(permission.id)} />
-      : settingsOpen ? <SettingsDialog settings={snapshot.settings} store={store} appearance={appearance} onClose={() => setSettingsOpen(false)} /> : deleteId ? <Modal title="Delete conversation?" onClose={() => setDeleteId(undefined)}><p>This removes “{snapshot.sessions.find(s => s.id === deleteId)?.title}” and its message history. Any running task will be cancelled.</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeleteId(undefined)}>Keep conversation</button><button className="button danger" onClick={async () => { const result = await store.command({ type: 'session.delete', sessionId: deleteId }); if (result?.ok) setDeleteId(undefined); }}>Delete conversation</button></div></Modal> : null}
+      : settingsOpen ? <SettingsDialog settings={snapshot.settings} store={store} appearance={appearance} initialTab={settingsOpen} onClose={() => setSettingsOpen(false)} /> : deleteId ? <Modal title="Delete conversation?" onClose={() => setDeleteId(undefined)}><p>This removes “{snapshot.sessions.find(s => s.id === deleteId)?.title}” and its message history. Any running task will be cancelled.</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeleteId(undefined)}>Keep conversation</button><button className="button danger" onClick={async () => { const result = await store.command({ type: 'session.delete', sessionId: deleteId }); if (result?.ok) setDeleteId(undefined); }}>Delete conversation</button></div></Modal> : null}
   </>;
 }

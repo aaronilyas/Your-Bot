@@ -344,3 +344,16 @@ h1 { font-weight: 600; letter-spacing: -.4px; font-size: 26px; margin: 20px 0 6p
 .agent-missing ul { list-style: none; padding: 0; display: grid; gap: 8px; margin: 8px 0 0; }
 .agent-missing li { display: grid; gap: 2px; }
 .agent-missing code, .agents-section code { font-family: ui-monospace, monospace; font-size: 12px; }
+.update-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 11.5px; font-weight: 600; }
+.update-pill:disabled { opacity: .6; }
+.updates-panel .update-status { flex-wrap: wrap; }
+.updates-panel .update-status .inline-error { flex: 1; }
+.updates-other-title { margin-top: 20px; }
+.update-notes { padding: 0 14px 12px; font-size: 13px; }
+.update-notes pre { margin: 8px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-family: inherit; font-size: 13px; color: var(--muted); }
+.update-progress { display: grid; gap: 6px; margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+.update-progress progress { width: 100%; accent-color: var(--accent); }
+.update-command { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.update-command code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; background: var(--field); border-radius: 8px; padding: 6px 8px; color: var(--text); }
+.updates-panel > .warning-inline, .updates-panel > .inline-error, .updates-panel > .agent-note { margin-top: 12px; }
+.update-confirm p { margin: 0 0 8px; }

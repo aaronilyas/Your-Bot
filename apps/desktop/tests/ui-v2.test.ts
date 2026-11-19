@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AppSnapshotV2, PermissionRequestV2, Routine, StandingGrant } from '@your-bot/contracts';
 import { App } from '../src/renderer/App';
@@ -485,3 +485,106 @@ describe('agents on this computer', () => {
   });
 });
 void agents;
+
+describe('app updates', () => {
+  const release = (version: string, relation: 'newer' | 'current' | 'older', extra: object = {}) => ({ tag: `v${version}`, version, name: `Your Bot ${version}`, publishedAt: '2026-11-01T00:00:00Z', prerelease: false, notes: `Notes for ${version}`, installable: true, relation, ...extra });
+  const install = { kind: 'appimage', label: 'AppImage', canInstall: true };
+  const checkResult = (extra: object = {}) => ({ currentVersion: '0.2.0', install, autoCheck: true, checkedAt: T0, releases: [release('0.3.0', 'newer'), release('0.2.0', 'current'), release('0.1.0', 'older')], latest: 'v0.3.0', updateAvailable: true, ...extra });
+  function api(overrides: object = {}) {
+    let progress: ((value: unknown) => void) | undefined;
+    const updates = {
+      status: vi.fn(async () => ({ currentVersion: '0.2.0', install, autoCheck: true })),
+      check: vi.fn(async (_force?: boolean) => checkResult()),
+      install: vi.fn(async (_tag: string) => ({ ok: true, restarting: true, message: 'Updated to 0.3.0. Restarting…' })),
+      openRelease: vi.fn(async (_tag?: string) => true),
+      setAutoCheck: vi.fn(async (_enabled: boolean) => true),
+      onProgress: vi.fn((listener: (value: unknown) => void) => { progress = listener; return () => { progress = undefined; }; }),
+      ...overrides,
+    };
+    return { updates, progress: (value: unknown) => progress?.(value) };
+  }
+  async function openWith(updates?: object) {
+    const h = harness({ bots: [coder, helper] });
+    if (updates) (h.transport as any).updates = updates;
+    render(createElement(App, { transport: h.transport }));
+    await screen.findByText('Backend connected');
+    return { ...h, user: userEvent.setup() };
+  }
+  async function openUpdates(updates?: object) {
+    const h = await openWith(updates);
+    await h.user.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    if (updates) await h.user.click(within(dialog).getByRole('tab', { name: 'Updates' }));
+    return { ...h, dialog };
+  }
+  it('updates to the latest release and shows progress', async () => {
+    const { updates, progress } = api();
+    const { dialog, user } = await openUpdates(updates);
+    expect(await within(dialog).findByText('Version 0.3.0 is available')).toBeTruthy();
+    expect(within(dialog).getByText('Installed as AppImage.')).toBeTruthy();
+    let finish!: (value: unknown) => void;
+    updates.install.mockImplementationOnce(() => new Promise(resolve => { finish = resolve as never; }));
+    await user.click(within(dialog).getByRole('button', { name: /Update to 0\.3\.0/ }));
+    expect(updates.install).toHaveBeenCalledWith('v0.3.0');
+    act(() => progress({ tag: 'v0.3.0', phase: 'downloading', received: 5 * 1048576, total: 20 * 1048576 }));
+    expect(await within(dialog).findByText('Downloading 5.0 MB of 20 MB…')).toBeTruthy();
+    await act(async () => finish({ ok: true, restarting: true, message: 'Updated to 0.3.0. Restarting…' }));
+    expect(await within(dialog).findByText(/Updated to 0\.3\.0\. Restarting/)).toBeTruthy();
+  });
+  it('asks for confirmation before reverting to an older version', async () => {
+    const { updates } = api();
+    const { dialog, user } = await openUpdates(updates);
+    await within(dialog).findByText('Version 0.3.0 is available');
+    expect((within(dialog).getByRole('combobox', { name: 'Version to install' }) as HTMLSelectElement).value).toBe('v0.1.0');
+    await user.click(within(dialog).getByRole('button', { name: /Revert to 0\.1\.0/ }));
+    const confirm = within(dialog).getByRole('alertdialog', { name: 'Revert to 0.1.0?' });
+    expect(within(confirm).getByText(/may not understand data saved by a newer one/)).toBeTruthy();
+    expect(updates.install).not.toHaveBeenCalled();
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(within(dialog).queryByRole('alertdialog')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: /Revert to 0\.1\.0/ }));
+    await user.click(within(within(dialog).getByRole('alertdialog')).getByRole('button', { name: 'Revert to 0.1.0' }));
+    expect(updates.install).toHaveBeenCalledWith('v0.1.0');
+  });
+  it('offers the download page when this copy cannot update itself', async () => {
+    const locked = { kind: 'manual', label: 'Portable archive (.tar.gz)', canInstall: false, reason: 'This copy was not installed by a package manager.' };
+    const { updates } = api({ check: vi.fn(async () => checkResult({ install: locked })), status: vi.fn(async () => ({ currentVersion: '0.2.0', install: locked, autoCheck: true })) });
+    const { dialog, user } = await openUpdates(updates);
+    expect(await within(dialog).findByText(/not installed by a package manager/)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /Update to/ })).toBeNull();
+    await user.click(within(dialog).getAllByRole('button', { name: 'Download page' })[0]!);
+    expect(updates.openRelease).toHaveBeenCalledWith('v0.3.0'); expect(updates.install).not.toHaveBeenCalled();
+  });
+  it('shows the terminal command when administrator rights could not be requested', async () => {
+    const { updates } = api({ install: vi.fn(async () => ({ ok: false, message: 'Run this command in a terminal, then restart Your Bot:', command: 'sudo /usr/bin/apt-get install -y --allow-downgrades /tmp/x.deb' })) });
+    const { dialog, user } = await openUpdates(updates);
+    await user.click(await within(dialog).findByRole('button', { name: /Update to 0\.3\.0/ }));
+    expect(await within(dialog).findByText('sudo /usr/bin/apt-get install -y --allow-downgrades /tmp/x.deb')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Copy' })).toBeTruthy();
+  });
+  it('reports being up to date and saves the automatic-check switch', async () => {
+    const { updates } = api({ check: vi.fn(async () => checkResult({ releases: [release('0.2.0', 'current'), release('0.1.0', 'older')], latest: 'v0.2.0', updateAvailable: false })) });
+    const { dialog, user } = await openUpdates(updates);
+    expect(await within(dialog).findByText('You’re up to date')).toBeTruthy();
+    await user.click(within(dialog).getByRole('switch'));
+    expect(updates.setAutoCheck).toHaveBeenCalledWith(false);
+    await user.click(within(dialog).getByRole('button', { name: /Check for updates/ }));
+    expect(updates.check).toHaveBeenLastCalledWith(true);
+  });
+  it('flags an available update in the sidebar and opens the Updates tab from it', async () => {
+    const { updates } = api();
+    const { user } = await openWith(updates);
+    await user.click(await screen.findByRole('button', { name: /Update to 0\.3\.0/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true');
+  });
+  it('does not check on startup when automatic checks are off, and hides the tab without an updates API', async () => {
+    const { updates } = api({ status: vi.fn(async () => ({ currentVersion: '0.2.0', install, autoCheck: false })) });
+    await openWith(updates);
+    await waitFor(() => expect(updates.status).toHaveBeenCalled());
+    expect(updates.check).not.toHaveBeenCalled(); expect(screen.queryByRole('button', { name: /Update to/ })).toBeNull();
+    cleanup();
+    const { dialog } = await openUpdates();
+    expect(within(dialog).queryByRole('tab', { name: 'Updates' })).toBeNull();
+  });
+});

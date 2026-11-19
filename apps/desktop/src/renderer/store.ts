@@ -3,7 +3,7 @@ import type {
   OwnerNotification, RoutineRun, SessionV2, StandingGrant, TaskId, BackendTransportV2, DeviceInfo, PermissionRequestV2, Routine,
 } from '@your-bot/contracts';
 import type { AppearancePrefs } from '../shared/appearance.js';
-import type { ProvidersApi } from '../shared/ipc.js';
+import type { ProvidersApi, UpdatesApi } from '../shared/ipc.js';
 
 /** The transport the renderer receives: v2 dispatch/subscribe plus the optional native folder picker. */
 export interface DesktopTransport extends BackendTransportV2 {
@@ -13,6 +13,8 @@ export interface DesktopTransport extends BackendTransportV2 {
   saveAppearance?(prefs: AppearancePrefs): Promise<boolean>;
   /** Agent CLI / local model server detection and one-click connect; absent in old hosts. */
   providers?: ProvidersApi;
+  /** In-app updates from published releases; absent in old hosts and in the browser. */
+  updates?: UpdatesApi;
 }
 export interface TaskActivity {
   id: TaskId; sessionId: string; status: string; text: string;
@@ -62,6 +64,8 @@ export class DesktopStore {
   clearError = (): void => this.update({ error: undefined });
   /** Provider detection API of the host, when it has one. */
   get providers(): ProvidersApi | undefined { return this.transport.providers; }
+  /** In-app update API of the host, when it has one. */
+  get updates(): UpdatesApi | undefined { return this.transport.updates; }
   get canChooseDirectory(): boolean { return typeof this.transport.chooseDirectory === 'function'; }
   /** Opens the host's native folder dialog; resolves to a path, or undefined if unavailable or cancelled. */
   chooseDirectory = async (): Promise<string | undefined> => {
