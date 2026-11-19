@@ -3,7 +3,7 @@ import type {
   Routine, RoutineRun, SessionV2, StandingGrant, StandingGrantScope,
 } from '@your-bot/contracts';
 import type { DesktopTransport } from '../renderer/store';
-import type { AgentRowInfo, ProvidersApi } from '../shared/ipc';
+import type { AgentRowInfo, ProvidersApi, ReleaseSummary, UpdateProgress, UpdatesApi } from '../shared/ipc';
 
 export interface MockTransportOptions { chunkDelayMs?: number; permissionDemo?: boolean; }
 
@@ -339,9 +339,33 @@ export function createMockTransport(options: MockTransportOptions = {}): Desktop
     async update(id) { const agent = fakeAgents.find(entry => entry.id === id); if (agent) { agent.updateAvailable = false; agent.version = agent.latestVersion ?? agent.version; } return { ok: !!agent, message: agent ? `${agent.name} updated (simulated).` : 'Unknown agent', output: 'simulated update\nnothing was installed' }; },
     async login(id) { const agent = fakeAgents.find(entry => entry.id === id); if (agent) agent.auth = 'signed-in'; return { ok: true }; },
   };
+  // Simulated releases around the running version: nothing is downloaded or installed.
+  const current = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.0';
+  const [major = 0, minor = 0, patch = 0] = current.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
+  const demoRelease = (version: string, relation: ReleaseSummary['relation'], daysAgo: number): ReleaseSummary => ({ tag: `v${version}`, version, name: `Your Bot ${version}`, publishedAt: new Date(Date.now() - daysAgo * 86400000).toISOString(), prerelease: false, notes: relation === 'newer' ? '- Simulated release notes\n- Nothing is downloaded in the demo' : '', installable: true, relation });
+  const demoReleases = [demoRelease(`${major}.${minor + 1}.0`, 'newer', 2), demoRelease(current, 'current', 30), ...(patch > 0 ? [demoRelease(`${major}.${minor}.${patch - 1}`, 'older', 60)] : minor > 0 ? [demoRelease(`${major}.${minor - 1}.0`, 'older', 90)] : [])];
+  const progressListeners = new Set<(progress: UpdateProgress) => void>();
+  let autoCheck = true;
+  const install = { kind: 'appimage' as const, label: 'AppImage (simulated)', canInstall: true };
+  const updates: UpdatesApi = {
+    async status() { return { currentVersion: current, install, autoCheck }; },
+    async check() { return { currentVersion: current, install, autoCheck, checkedAt: now(), releases: clone(demoReleases), latest: demoReleases[0]!.tag, updateAvailable: true }; },
+    async install(tag) {
+      const release = demoReleases.find(entry => entry.tag === tag);
+      if (!release) return { ok: false, message: 'Unknown version' };
+      const total = 120 * 1048576;
+      for (const received of [0, total / 4, total / 2, total]) { progressListeners.forEach(fn => fn({ tag, phase: 'downloading', received, total })); await new Promise(resolve => setTimeout(resolve, 250)); }
+      progressListeners.forEach(fn => fn({ tag, phase: 'verifying' }));
+      return { ok: true, message: `Simulated: ${release.version} was “installed”. Nothing was downloaded or changed, and the demo keeps running.` };
+    },
+    async openRelease() { return false; },
+    async setAutoCheck(enabled) { autoCheck = enabled; return true; },
+    onProgress(listener) { progressListeners.add(listener); return () => { progressListeners.delete(listener); }; },
+  };
   return {
     dispatch,
     providers,
+    updates,
     subscribe(listener) { if (closed) throw new Error('Demo transport is closed'); listeners.add(listener); return () => { listeners.delete(listener); }; },
     /** Simulated: nothing is read from disk; a fixed fictional path is returned. */
     async chooseDirectory() { return closed ? undefined : '/demo/workspace'; },

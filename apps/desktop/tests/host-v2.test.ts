@@ -246,3 +246,40 @@ describe('provider detection IPC', () => {
     await host.close();
   });
 });
+
+describe('app update IPC', () => {
+  const CHANNELS = [IPC.updatesStatus, IPC.updatesCheck, IPC.updatesInstall, IPC.updatesOpenRelease, IPC.updatesSetAutoCheck];
+  const call = (channel: string, value?: unknown, event: unknown = valid()) => fake.handlers.get(channel)!(event, value) as Promise<any>;
+  const fakeUpdater = () => ({
+    status: vi.fn(async () => ({ currentVersion: '0.1.0', install: { kind: 'appimage' as const, label: 'AppImage', canInstall: true }, autoCheck: true })),
+    check: vi.fn(async (_force?: boolean) => ({ currentVersion: '0.1.0', install: { kind: 'appimage' as const, label: 'AppImage', canInstall: true }, autoCheck: true, checkedAt: 'now', releases: [], updateAvailable: false })),
+    install: vi.fn(async (_tag: string, onProgress?: (progress: any) => void) => { onProgress?.({ tag: 'v0.2.0', phase: 'downloading', received: 1, total: 2 }); return { ok: true, message: 'done', restarting: true }; }),
+    openRelease: vi.fn(async (_tag?: string) => true),
+    setAutoCheck: vi.fn(async (_enabled: boolean) => true),
+  });
+  it('registers nothing without an updater', async () => {
+    const s = setup(); const host = await createDesktopHost({ gatewayFactory: () => s.gateway });
+    for (const channel of CHANNELS) expect(fake.handlers.has(channel)).toBe(false);
+    await host.close();
+  });
+  it('passes only a validated tag or boolean, forwards progress to the window, and unregisters on close', async () => {
+    const s = setup(); const updater = fakeUpdater();
+    const host = await createDesktopHost({ gatewayFactory: () => s.gateway, updater });
+    expect(await call(IPC.updatesStatus)).toMatchObject({ currentVersion: '0.1.0' });
+    await call(IPC.updatesCheck, true); expect(updater.check).toHaveBeenLastCalledWith(true);
+    await call(IPC.updatesCheck, 'yes'); expect(updater.check).toHaveBeenLastCalledWith(false);
+    expect(await call(IPC.updatesInstall, 'v0.2.0')).toEqual({ ok: true, message: 'done', restarting: true });
+    expect(updater.install).toHaveBeenCalledWith('v0.2.0', expect.any(Function));
+    expect(fake.latestWindow.webContents.send).toHaveBeenCalledWith(IPC.updatesProgress, { tag: 'v0.2.0', phase: 'downloading', received: 1, total: 2 });
+    for (const bad of ['latest', 'v1', '/tmp/x.AppImage', 'https://evil.example/', { tag: 'v1.0.0' }, undefined, `v1.0.0-${'x'.repeat(80)}`]) await expect(call(IPC.updatesInstall, bad)).rejects.toThrow('Unknown version');
+    expect(updater.install).toHaveBeenCalledTimes(1);
+    await call(IPC.updatesOpenRelease); expect(updater.openRelease).toHaveBeenLastCalledWith(undefined);
+    await call(IPC.updatesOpenRelease, 'v0.1.0'); expect(updater.openRelease).toHaveBeenLastCalledWith('v0.1.0');
+    await expect(call(IPC.updatesOpenRelease, 'https://evil.example/')).rejects.toThrow('Unknown version');
+    await call(IPC.updatesSetAutoCheck, false); expect(updater.setAutoCheck).toHaveBeenCalledWith(false);
+    await expect(call(IPC.updatesSetAutoCheck, 'false')).rejects.toThrow('boolean');
+    for (const channel of CHANNELS) await expect(call(channel, 'v0.2.0', { sender: {} })).rejects.toThrow('Untrusted');
+    await host.close();
+    for (const channel of CHANNELS) expect(fake.handlers.has(channel)).toBe(false);
+  });
+});

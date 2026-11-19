@@ -24,7 +24,7 @@ async function validateHost() { try {
     return { keys: Object.keys(transport).sort(), node: typeof require, snapshot, forged, title: document.title, text: document.body.innerText, csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content,
       look: root.dataset.look, mode: root.dataset.mode, canvas: root.style.getPropertyValue('--canvas').trim(), storedType: stored === undefined ? 'undefined' : typeof stored, violations };
   })()`);
-  assert.deepEqual(result.keys, ['chooseDirectory', 'dispatch', 'loadAppearance', 'saveAppearance', 'subscribe']);
+  assert.deepEqual(result.keys, ['chooseDirectory', 'dispatch', 'loadAppearance', 'providers', 'saveAppearance', 'subscribe', 'updates']);
   assert.match(result.look, /^(spring|summer|autumn|winter|classic)$/); assert.match(result.mode, /^(light|dark)$/); assert.match(result.canvas, /^#[0-9a-f]{6}$/);
   assert.match(result.storedType, /^(undefined|object)$/); assert.deepEqual(result.violations, []); assert.equal(result.node, 'undefined');
   assert.equal(result.snapshot.snapshot.settings.providers[0].apiKey, undefined);

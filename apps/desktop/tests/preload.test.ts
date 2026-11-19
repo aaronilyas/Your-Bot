@@ -6,7 +6,8 @@ describe('sandbox preload', () => {
   it('exposes only fixed dispatch, subscription, folder-picker and appearance functions, excluding IPC event objects', async () => {
     expect(fake.expose).toHaveBeenCalledOnce();
     const [name, transport] = fake.expose.mock.calls[0];
-    expect(name).toBe('yourBot'); expect(Object.keys(transport).sort()).toEqual(['chooseDirectory', 'dispatch', 'loadAppearance', 'providers', 'saveAppearance', 'subscribe']); expect(Object.isFrozen(transport)).toBe(true); expect(Object.keys(transport.providers).sort()).toEqual(['link', 'login', 'scan', 'update']); expect(Object.isFrozen(transport.providers)).toBe(true);
+    expect(name).toBe('yourBot'); expect(Object.keys(transport).sort()).toEqual(['chooseDirectory', 'dispatch', 'loadAppearance', 'providers', 'saveAppearance', 'subscribe', 'updates']); expect(Object.isFrozen(transport)).toBe(true); expect(Object.keys(transport.providers).sort()).toEqual(['link', 'login', 'scan', 'update']); expect(Object.isFrozen(transport.providers)).toBe(true);
+    expect(Object.keys(transport.updates).sort()).toEqual(['check', 'install', 'onProgress', 'openRelease', 'setAutoCheck', 'status']); expect(Object.isFrozen(transport.updates)).toBe(true);
     const command = { version: 1, id: 'c', type: 'state.sync' };
     await transport.dispatch(command); expect(fake.invoke).toHaveBeenCalledWith('your-bot:dispatch', command);
     const listener = vi.fn(); const unsubscribe = transport.subscribe(listener);
@@ -52,5 +53,31 @@ describe('sandbox preload', () => {
     expect(() => providers.link('everything')).toThrow(); expect(() => providers.link([{ command: 'rm' }])).toThrow(); expect(() => providers.link(Array(33).fill('claude'))).toThrow();
     expect(() => providers.update({ id: 'claude' })).toThrow(); expect(() => providers.login(undefined)).toThrow(); expect(() => providers.update('')).toThrow();
     expect(fake.invoke).not.toHaveBeenCalled();
+  });
+  it('updates bridge sends only a release tag or a boolean on fixed channels and filters progress events', async () => {
+    const { updates } = fake.expose.mock.calls[0][1];
+    fake.invoke.mockClear();
+    await updates.status(); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-status');
+    await updates.check(); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-check', false);
+    await updates.check(true); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-check', true);
+    await updates.check('yes'); expect(fake.invoke).toHaveBeenLastCalledWith('your-bot:updates-check', false);
+    await updates.install('v0.2.0'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-install', 'v0.2.0');
+    await updates.install('1.0.0-beta.1'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-install', '1.0.0-beta.1');
+    await updates.openRelease('v0.1.0'); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-open-release', 'v0.1.0');
+    await updates.openRelease(); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-open-release', undefined);
+    await updates.setAutoCheck(false); expect(fake.invoke).toHaveBeenCalledWith('your-bot:updates-auto-check', false);
+    fake.invoke.mockClear();
+    for (const odd of ['latest', '../v1.0.0', 'v1', 'https://evil.example/x.AppImage', { tag: 'v1.0.0' }, undefined]) expect(() => updates.install(odd)).toThrow();
+    expect(() => updates.openRelease('javascript:alert(1)')).toThrow(); expect(() => updates.setAutoCheck('false')).toThrow();
+    expect(fake.invoke).not.toHaveBeenCalled();
+    fake.on.mockClear(); fake.remove.mockClear();
+    const listener = vi.fn(); const stop = updates.onProgress(listener);
+    const [channel, handler] = fake.on.mock.calls[0];
+    expect(channel).toBe('your-bot:updates-progress');
+    handler({ sender: 'x' }, { tag: 'v0.2.0', phase: 'downloading', received: 5, total: 10, extra: 'dropped' });
+    handler({}, { tag: 'v0.2.0', phase: 'exploding' }); handler({}, null);
+    expect(listener).toHaveBeenCalledTimes(1); expect(listener).toHaveBeenCalledWith({ tag: 'v0.2.0', phase: 'downloading', received: 5, total: 10 });
+    stop(); expect(fake.remove).toHaveBeenCalledWith('your-bot:updates-progress', handler);
+    expect(() => updates.onProgress('nope')).toThrow();
   });
 });

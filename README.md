@@ -55,6 +55,20 @@ To build locally, run `npm run package:linux` (all Linux formats, x64 + arm64), 
 
 Builds are unsigned unless signing secrets are configured. With no certificate, macOS builds are ad-hoc signed. The first launch then needs right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/Your Bot.app"`, and Windows SmartScreen shows "More info → Run anyway". On Windows 11 PCs with Smart App Control turned on, unsigned installers and apps are blocked outright with no override, so those users need a signed build. To sign, add the repository secrets `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (Developer ID signing + notarization) and `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD`.
 
+### Updating and reverting
+
+**Settings → Updates** shows the installed version and checks the project's [GitHub releases](https://github.com/aaronilyas/Your-Bot/releases). **Update to x.y.z** installs the newest release. Under **Other versions** you can install any published release, including an older one to revert after a bad update; reverts ask for confirmation, because an older version may not understand data saved by a newer one (bots, conversations and settings are left in place). By default Your Bot looks for a new release once at startup and shows **Update to x.y.z** in the sidebar when one exists; turn this off with **Check automatically**. The check fetches only the public release list, and nothing about you or your bots is sent.
+
+The app downloads the installer that matches how it was installed and checks it against the release's `SHA256SUMS.txt` before using it. Then it installs and restarts:
+
+| Installed as | How it is applied |
+| --- | --- |
+| AppImage | The file at `$APPIMAGE` is replaced in place, with no password needed. Its folder must be writable. |
+| `.deb` / `.rpm` / pacman | Runs `apt-get install --allow-downgrades`, `rpm -U --oldpackage` or `pacman -U` through `pkexec`, which shows the system password prompt. If no prompt is available, the app shows the exact `sudo` command to run instead. |
+| macOS app | The new bundle is unpacked and swapped in after the app quits, then reopened. The app must live in a folder you can write to, such as Applications, not a quarantined download location. |
+| Windows installer | The release's setup program runs silently over the existing install, per-user or per-machine as before, and reopens the app. |
+| `.tar.gz`, Windows zip, source checkout | These cannot update themselves. **Download page** opens the release on GitHub. |
+
 Chromium's renderer sandbox must work on the host. If AppArmor prevents development Electron from starting, use an administrator-installed package or configure the host's approved Chromium sandbox policy. The application never supplies `--no-sandbox` and does not change system policy. The disposable container workflow below permits native validation without changing the host.
 
 ## Connect agents automatically
